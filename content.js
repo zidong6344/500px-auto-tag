@@ -348,18 +348,8 @@
         let imgData;
         try {
           console.log(`[Auto Tag] Batch [${i+1}] fetchImage:`, imgUrl);
-          const resp = await new Promise((resolve, reject) => {
-            chrome.runtime.sendMessage(
-              { action: 'fetchImage', url: imgUrl },
-              (r) => {
-                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                else if (r && r.error) reject(new Error(r.error));
-                else if (r && r.base64) resolve(r.base64);
-                else reject(new Error('empty response'));
-              }
-            );
-          });
-          imgData = resp;
+          const fetchResp = await sendMessageAsync({ action: 'fetchImage', url: imgUrl });
+          imgData = fetchResp.base64;
         } catch (e) {
           if (cardImg) {
             try { imgData = await imageToBase64(cardImg); } catch {}
@@ -377,21 +367,11 @@
 
         const compressed = await compressImage(imgData, 1600, 0.8);
 
-        const result = await new Promise((resolve, reject) => {
-          chrome.runtime.sendMessage(
-            {
-              action: 'generateTags',
-              imageData: compressed,
-              lang: config.lang || 'zh',
-              keywordCount: config.keywordCount || 35,
-            },
-            (resp) => {
-              if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-              else if (resp && resp.error) reject(new Error(resp.error));
-              else if (resp) resolve(resp);
-              else reject(new Error('无响应'));
-            }
-          );
+        const result = await sendMessageAsync({
+          action: 'generateTags',
+          imageData: compressed,
+          lang: config.lang || 'zh',
+          keywordCount: config.keywordCount || 35,
         });
 
         // 5. 填入结果
@@ -603,6 +583,31 @@
     return null;
   }
 
+  // 包装 sendMessage，失败自动重试一次
+  function sendMessageAsync(msg) {
+    return new Promise((resolve, reject) => {
+      const attempt = (retry) => {
+        chrome.runtime.sendMessage(msg, (resp) => {
+          if (chrome.runtime.lastError) {
+            if (retry) {
+              console.warn('[Auto Tag] sendMessage 失败，重试...', chrome.runtime.lastError.message);
+              setTimeout(() => attempt(false), 500);
+              return;
+            }
+            reject(new Error(chrome.runtime.lastError.message));
+          } else if (resp && resp.error) {
+            reject(new Error(resp.error));
+          } else if (resp) {
+            resolve(resp);
+          } else {
+            reject(new Error('无响应'));
+          }
+        });
+      };
+      attempt(true);
+    });
+  }
+
   // ===== 核心逻辑 =====
   let currentImageUrl = null; // 当前选中图片的 URL（字符串，不受 DOM 过期影响）
   let autoMode = false; // 关闭自动分析，需手动点 AI Auto Tag
@@ -764,21 +769,10 @@
       // 通过 background 获取图片（有 CORS 权限，且每次都拉最新图）
       let imgData;
       try {
-        const resp = await new Promise((resolve, reject) => {
-          chrome.runtime.sendMessage(
-            { action: 'fetchImage', url: imgUrl },
-            (r) => {
-              if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-              else if (r && r.error) reject(new Error(r.error));
-              else if (r && r.base64) resolve(r.base64);
-              else reject(new Error('empty response'));
-            }
-          );
-        });
-        imgData = resp;
+        const fetchResp = await sendMessageAsync({ action: 'fetchImage', url: imgUrl });
+        imgData = fetchResp.base64;
       } catch (e) {
         console.warn('[Auto Tag] Background fetch failed, trying direct:', e.message);
-        // 回退：直接找页面上的 img 元素
         const mainImg = getMainPreviewImage();
         if (mainImg) {
           imgData = await imageToBase64(mainImg);
@@ -801,26 +795,11 @@
       imgData = await compressImage(imgData, 1600, 0.8);
 
       // 3. 调用 AI
-      const result = await new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage(
-          {
-            action: 'generateTags',
-            imageData: imgData,
-            lang: config.lang || 'zh',
-            keywordCount: config.keywordCount || 35,
-          },
-          (resp) => {
-            if (chrome.runtime.lastError) {
-              reject(new Error(chrome.runtime.lastError.message));
-            } else if (resp && resp.error) {
-              reject(new Error(resp.error));
-            } else if (resp) {
-              resolve(resp);
-            } else {
-              reject(new Error('无响应'));
-            }
-          }
-        );
+      const result = await sendMessageAsync({
+        action: 'generateTags',
+        imageData: imgData,
+        lang: config.lang || 'zh',
+        keywordCount: config.keywordCount || 35,
       });
 
       // 4. 填入结果
@@ -1249,11 +1228,17 @@
   // ===== 初始化 =====
   // 长连接防止 Service Worker 在 AI 推理期间被 Chrome 回收
   let keepAlivePort;
+  let keepAliveTimer;
   function connectKeepAlive() {
     keepAlivePort = chrome.runtime.connect({ name: 'keepalive' });
     keepAlivePort.onDisconnect.addListener(() => {
-      setTimeout(connectKeepAlive, 1000); // 断开后自动重连
+      clearInterval(keepAliveTimer);
+      setTimeout(connectKeepAlive, 500);
     });
+    // 每 20 秒发一次心跳，保持连接活跃
+    keepAliveTimer = setInterval(() => {
+      try { keepAlivePort.postMessage({ ping: true }); } catch {}
+    }, 20000);
   }
 
   function init() {

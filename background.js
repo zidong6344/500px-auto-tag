@@ -6,6 +6,9 @@ const OLLAMA_URL = 'http://localhost:11434';
 // 长连接保活，防止 Service Worker 被回收
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'keepalive') {
+    port.onMessage.addListener((msg) => {
+      if (msg.ping) port.postMessage({ pong: true });
+    });
     port.onDisconnect.addListener(() => {});
   }
 });
@@ -169,6 +172,30 @@ function parseAIResponse(text) {
     try {
       return JSON.parse(braceMatch[0]);
     } catch {}
+  }
+
+  // 解析 markdown 格式：**标题**...**描述**...**关键词**...
+  const mdTitle = text.match(/\*\*标题\*\*[：:]?\s*(.+?)(?:\n|$|\*\*描述|\*\*关键词)/);
+  const mdDesc = text.match(/\*\*描述\*\*[：:]?\s*(.+?)(?:\n|$|\*\*关键词)/);
+  const mdKw = text.match(/\*\*关键词\*\*[：:]?\s*([\s\S]+?)$/);
+  if (mdTitle) {
+    return {
+      title: (mdTitle[1] || '').trim(),
+      description: (mdDesc?.[1] || '').trim(),
+      keywords: (mdKw?.[1] || '').trim().replace(/\s+/g, ''),
+    };
+  }
+
+  // 英文 markdown
+  const enTitle = text.match(/\*\*Title\*\*[：:]?\s*(.+?)(?:\n|$|\*\*Description|\*\*Keywords)/i);
+  const enDesc = text.match(/\*\*Description\*\*[：:]?\s*(.+?)(?:\n|$|\*\*Keywords)/i);
+  const enKw = text.match(/\*\*Keywords\*\*[：:]?\s*([\s\S]+?)$/i);
+  if (enTitle) {
+    return {
+      title: (enTitle[1] || '').trim(),
+      description: (enDesc?.[1] || '').trim(),
+      keywords: (enKw?.[1] || '').trim().replace(/\s+/g, ''),
+    };
   }
 
   throw new Error('AI 返回格式无法解析: ' + text.substring(0, 200));
