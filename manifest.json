@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "500px Auto Tag",
+  "version": "1.0.0",
+  "description": "Ollama Qwen3-VL 本地驱动的 500px 图片标题和关键词自动生成",
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": [
+    "https://500px.com/*",
+    "https://*.500px.com.cn/*",
+    "https://*.aliyuncs.com/*",
+    "https://*.500px.me/*",
+    "http://localhost:11434/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://500px.com/*",
+        "https://*.500px.com.cn/*"
+      ],
+      "js": ["content.js"],
+      "css": ["styles/content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

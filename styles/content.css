@@ -1,0 +1,188 @@
+/* content.css — 500px Auto Tag 浮动按钮样式 */
+
+#px-autotag-btn {
+  position: fixed !important;
+  bottom: 24px;
+  left: 24px;
+  top: auto;
+  right: auto;
+  z-index: 2147483647 !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  pointer-events: auto !important;
+  background: rgba(20, 20, 40, 0.92);
+  backdrop-filter: blur(12px);
+  border-radius: 16px;
+  padding: 8px 14px 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  min-width: 220px;
+  user-select: none;
+}
+
+/* --- 单张分析按钮 --- */
+.px-autotag-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 24px;
+  background: linear-gradient(135deg, #ff6900 0%, #ff8c00 100%);
+  color: #fff;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 700;
+  box-shadow: 0 4px 16px rgba(255, 105, 0, 0.5);
+  transition: all 0.2s;
+  user-select: none;
+  cursor: pointer;
+}
+
+.px-autotag-inner:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 24px rgba(255, 105, 0, 0.7);
+}
+
+.px-autotag-inner:active {
+  transform: translateY(0);
+}
+
+.px-autotag-icon {
+  font-size: 20px;
+}
+
+.px-autotag-hint {
+  font-size: 11px;
+  color: rgba(255,255,255,0.6);
+  background: rgba(255,255,255,0.12);
+  padding: 2px 8px;
+  border-radius: 8px;
+}
+
+/* --- 状态提示 --- */
+.px-autotag-status {
+  display: none;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  margin-top: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.px-autotag-status.info {
+  display: block;
+  background: #1a3a5c;
+  color: #7cc4ff;
+}
+
+.px-autotag-status.loading {
+  display: block;
+  background: #2a2040;
+  color: #c4a0ff;
+}
+
+.px-autotag-status.success {
+  display: block;
+  background: #0d3320;
+  color: #00f0a0;
+}
+
+.px-autotag-status.error {
+  display: block;
+  background: #3d1010;
+  color: #ff7070;
+}
+
+/* --- 拖拽手柄 --- */
+.px-autotag-drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 0 6px;
+  cursor: grab;
+  user-select: none;
+  margin-bottom: 2px;
+}
+.px-drag-dots {
+  display: block;
+  width: 32px;
+  height: 4px;
+  background: rgba(255,255,255,0.2);
+  border-radius: 2px;
+  pointer-events: none;
+}
+.px-autotag-drag-handle:hover .px-drag-dots {
+  background: rgba(255,255,255,0.5);
+}
+.px-autotag-drag-handle:active {
+  cursor: grabbing;
+}
+
+/* --- 分隔线 --- */
+.px-autotag-divider {
+  width: 100%;
+  height: 1px;
+  background: rgba(255,255,255,0.1);
+  margin: 10px 0;
+}
+
+/* --- 批量操作区 --- */
+.px-autotag-section {
+  margin-bottom: 2px;
+}
+
+.px-batch-row {
+  display: flex;
+  gap: 8px;
+}
+
+/* 批量启动按钮 — 和主按钮同风格 */
+.px-batch-btn {
+  flex: 1;
+  padding: 10px 14px;
+  background: linear-gradient(135deg, #0071e3 0%, #005bb5 100%);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+  font-family: inherit;
+  box-shadow: 0 3px 12px rgba(0, 113, 227, 0.4);
+}
+
+.px-batch-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 5px 18px rgba(0, 113, 227, 0.6);
+}
+
+.px-batch-btn:active {
+  transform: translateY(0);
+}
+
+/* 停止按钮 */
+.px-batch-stop {
+  flex: 0 0 auto;
+  padding: 10px 16px;
+  background: linear-gradient(135deg, #e03030 0%, #b01010 100%) !important;
+  color: #fff !important;
+  box-shadow: 0 3px 12px rgba(224, 48, 48, 0.4) !important;
+}
+
+.px-batch-stop:hover {
+  box-shadow: 0 5px 18px rgba(224, 48, 48, 0.6) !important;
+}
+
+/* 批量进度 */
+.px-batch-progress {
+  display: block;
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #ddd;
+  text-align: center;
+  min-height: 18px;
+}
