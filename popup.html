@@ -96,7 +96,46 @@
       border-color: #ff6900;
       background: #2a1a0a;
     }
-    .model-info {
+    .provider-group {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .provider-group label {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 0;
+      padding: 8px 10px;
+      background: #16213e;
+      border: 1px solid #333;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      color: #e0e0e0;
+    }
+    .provider-group input[type="radio"] { display: none; }
+    .provider-group input[type="radio"]:checked + span {
+      color: #ff6900;
+    }
+    .provider-group label:has(input:checked) {
+      border-color: #ff6900;
+      background: #2a1a0a;
+    }
+    .provider-icon {
+      font-size: 16px;
+    }
+    .section-divider {
+      width: 100%;
+      height: 1px;
+      background: rgba(255,255,255,0.1);
+      margin: 14px 0;
+    }
+    .volc-section { display: none; }
+    .ollama-section { display: none; }
+    .section-visible { display: block; }
+    .info-box {
       margin-top: 8px;
       padding: 8px 10px;
       background: #16213e;
@@ -104,24 +143,67 @@
       font-size: 11px;
       color: #888;
     }
-    .model-info strong { color: #ff6900; }
+    .info-box strong { color: #ff6900; }
+    .link {
+      color: #ff6900;
+      text-decoration: none;
+    }
+    .link:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
   <h1>📸 500px Auto Tag</h1>
-  <p class="subtitle">Ollama Qwen3-VL 本地生成标题和关键词</p>
+  <p class="subtitle">AI 图片标题和关键词自动生成</p>
 
-  <label for="model">模型</label>
-  <select id="model">
-    <option value="">加载中...</option>
-  </select>
-  <div class="model-info" id="modelInfo">
-    正在从 Ollama 获取本地模型列表...
+  <label>AI 服务</label>
+  <div class="provider-group">
+    <label>
+      <input type="radio" name="provider" value="volcengine" checked />
+      <span class="provider-icon">🔥</span>
+      <span>火山引擎豆包</span>
+    </label>
+    <label>
+      <input type="radio" name="provider" value="ollama" />
+      <span class="provider-icon">🦙</span>
+      <span>Ollama 本地</span>
+    </label>
   </div>
 
-  <label for="apiKey">Ollama API Key（本地留空即可）</label>
-  <input type="password" id="apiKey" placeholder="本地部署无需填写" />
-  <p class="hint">使用本地 Ollama 可留空，远程需填写</p>
+  <!-- 火山引擎配置 -->
+  <div class="volc-section section-visible" id="volcSection">
+    <div class="section-divider"></div>
+
+    <label for="apiKey">火山引擎 API Key</label>
+    <input type="password" id="apiKey" placeholder="在方舟平台获取 API Key" />
+    <p class="hint">获取方式：火山引擎方舟平台 → <a class="link" href="https://console.volcengine.com/ark" target="_blank">ark.cn-beijing.volces.com</a> → 创建接入点 → 复制 Key</p>
+
+    <label for="volcModel">模型 Endpoint ID</label>
+    <input type="text" id="volcModel" placeholder="如：ep-20241028-xxxxx（在方舟平台创建推理接入点后获得）" />
+    <p class="hint">推荐 Doubao-Seed-1.6-flash（快·便宜），在方舟平台创建推理接入点 → 复制 Endpoint ID 填入此处</p>
+
+    <div class="info-box">
+      <strong>豆包视觉模型</strong>：中文理解能力极佳，图库标题质量高，速度快（约2-5秒/张）<br/>
+      费用：约 0.01-0.03 元/张，新用户有免费额度
+    </div>
+  </div>
+
+  <!-- Ollama 配置 -->
+  <div class="ollama-section" id="ollamaSection">
+    <div class="section-divider"></div>
+
+    <label for="model">Ollama 模型</label>
+    <select id="model">
+      <option value="">加载中...</option>
+    </select>
+    <div class="info-box" id="modelInfo">
+      正在从 Ollama 获取本地模型列表...
+    </div>
+
+    <label for="ollamaApiKey">Ollama API Key（本地留空）</label>
+    <input type="password" id="ollamaApiKey" placeholder="本地部署无需填写" />
+  </div>
+
+  <div class="section-divider"></div>
 
   <label>生成语言</label>
   <div class="lang-group">
@@ -146,7 +228,11 @@
 
   <label for="defaultLocation">默认拍摄地点</label>
   <input type="text" id="defaultLocation" placeholder="如：北京、上海、广东省" />
-  <p class="hint">支持：北京/上海/天津/重庆/香港/澳门 或 省份名（如广东省、浙江省）</p>
+  <p class="hint">支持：北京/上海/天津/重庆/香港/澳门 或 省份名</p>
+
+  <label for="defaultKeywords">默认关键词</label>
+  <input type="text" id="defaultKeywords" placeholder="如：视觉中国,商业摄影,版权图片" />
+  <p class="hint">每张图都会追加这些关键词，逗号分隔</p>
 
   <button class="btn" id="save">保存设置</button>
   <div class="status" id="status"></div>

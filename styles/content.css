@@ -178,11 +178,23 @@
 
 /* 批量进度 */
 .px-batch-progress {
-  display: block;
+  display: none;
   margin-top: 8px;
   font-size: 13px;
   font-weight: 600;
   color: #ddd;
   text-align: center;
-  min-height: 18px;
+}
+.px-batch-progress:not(:empty) {
+  display: block;
+}
+
+.px-share-btn {
+  width: 100%;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+  box-shadow: 0 3px 12px rgba(16, 185, 129, 0.4) !important;
+}
+
+.px-share-btn:hover {
+  box-shadow: 0 5px 18px rgba(16, 185, 129, 0.6) !important;
 }

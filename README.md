@@ -1,25 +1,45 @@
 # 500px Auto Tag
 
-Chrome 浏览器扩展，为 500px CreatorStudio 自动生成 VCG（视觉中国）风格的图片标题和关键词。基于本地 Ollama Qwen3-VL 视觉模型驱动。
+Chrome 浏览器扩展，为 500px CreatorStudio 自动生成 VCG（视觉中国）风格的图片标题和关键词。
+
+## 支持的 AI 服务
+
+| 服务 | 模型 | 速度 | 效果 | 成本 |
+|------|------|------|------|------|
+| **火山引擎豆包** | Doubao-Seed-1.6-flash | 1-2秒 | 优 | ~0.01元/张 |
+| **Ollama 本地** | Qwen3-VL 4B/8B | 30-60秒 | 中 | 免费 |
+
+推荐使用**火山引擎豆包**，中文理解能力远超本地小模型，速度快且成本低。
 
 ## 功能
 
 - **AI 单张分析**：选中一张图片，自动生成标题、描述和关键词
 - **批量处理**：一键遍历所有图片，自动填写，可随时中断
+- **一键分享全部**：自动逐张点击分享到 500px，无需手动操作
 - **智能跳过**：已提交（canSubmit）的图片自动跳过，不重复处理
 - **VCG 风格标题**：15~30 字长标题，含主体、场景、光线、氛围
 - **中文 / 英文**：支持中英文两种语言输出
 - **默认地点填充**：自动填入拍摄地点（支持中国省市）
-- **关键词上限**：默认 35 个关键词
+- **默认关键词**：设置默认关键词，每张图片都会追加（AI 关键词自动缩减数量以保证总上限）
+- **关键词上限**：默认 35 个关键词（含默认关键词）
 
-## 环境要求
+## 火山引擎豆包配置
 
-- [Ollama](https://ollama.com/) 运行在本地 `localhost:11434`
-- Qwen3-VL 视觉模型（推荐 `qwen3-vl:4b`，约 3GB 显存）
+1. 注册火山引擎账号：https://console.volcengine.com
+2. 进入方舟（Ark）平台：https://console.volcengine.com/ark
+3. 创建推理接入点：
+   - 选择模型 `Doubao-Seed-1.6-flash`
+   - 创建后获得 **Endpoint ID**（形如 `ep-xxxxxxxxx-xxxxx`）
+4. 获取 API Key：方舟平台 → API Key 管理 → 创建新 Key
+5. 在插件设置中填写 API Key 和 Endpoint ID
+
+## Ollama 本地配置（备选）
 
 ```bash
 ollama pull qwen3-vl:4b
 ```
+
+环境变量：`OLLAMA_ORIGINS=*`
 
 ## 安装使用
 
@@ -27,29 +47,15 @@ ollama pull qwen3-vl:4b
 2. Chrome 打开 `chrome://extensions/`
 3. 开启右上角「开发者模式」
 4. 点「加载已解压的扩展程序」，选择本仓库目录
-5. 设置 Ollama 环境变量（Windows）：
-
-```
-OLLAMA_ORIGINS=*
-```
-
+5. 打开插件设置面板，选择 AI 服务（火山引擎/Ollama），填写配置
 6. 打开 [creatorstudio.500px.com.cn](https://creatorstudio.500px.com.cn) 上传页
 7. 点击图片缩略图选中，再点左下角 `✨ AI Auto Tag` 按钮
 8. 或点 `⚡ 批量处理全部` 一键处理所有图片
-
-## 模型选择
-
-打开扩展设置面板，会自动从 Ollama 获取本地模型列表，也可手动选择：
-
-| 模型 | 大小 | 速度 | 适用 |
-|------|------|------|------|
-| Qwen3-VL 4B | ~3GB | 快 | 推荐，中文好 |
-| Qwen3-VL 8B | ~6GB | 中等 | 更准 |
-| Qwen3-VL 2B | ~1.5GB | 极快 | 尝鲜 |
+9. 或点 `📤 一键分享全部` 自动逐张分享到 500px
 
 ## 注意事项
 
+- 火山引擎 API Key 必须填写，否则无法调用
+- 火山引擎的 Endpoint ID 不是模型名称，是在方舟平台创建推理接入点后获得的
 - Ollama 必须设置 `OLLAMA_ORIGINS=*`，否则扩展请求会被 403 拒绝
-- 本地推理耗时取决于 GPU，8B 模型单张约 30~60 秒
 - 批量处理会按顺序依次处理，可随时点「停止」
-- API Key 留空使用本地 Ollama，如需远程部署可填写

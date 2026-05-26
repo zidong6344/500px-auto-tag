@@ -2,14 +2,15 @@
   "manifest_version": 3,
   "name": "500px Auto Tag",
   "version": "1.0.0",
-  "description": "Ollama Qwen3-VL 本地驱动的 500px 图片标题和关键词自动生成",
+  "description": "AI 驱动的 500px 图片标题和关键词自动生成（支持火山引擎豆包/Ollama）",
   "permissions": ["activeTab", "storage", "scripting"],
   "host_permissions": [
     "https://500px.com/*",
     "https://*.500px.com.cn/*",
     "https://*.aliyuncs.com/*",
     "https://*.500px.me/*",
-    "http://localhost:11434/*"
+    "http://localhost:11434/*",
+    "https://ark.cn-beijing.volces.com/*"
   ],
   "action": {
     "default_popup": "popup.html",
