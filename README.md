@@ -59,3 +59,9 @@ ollama pull qwen3-vl:4b
 - 火山引擎的 Endpoint ID 不是模型名称，是在方舟平台创建推理接入点后获得的
 - Ollama 必须设置 `OLLAMA_ORIGINS=*`，否则扩展请求会被 403 拒绝
 - 批量处理会按顺序依次处理，可随时点「停止」
+
+## 赞赏
+
+如果这个工具对你有帮助，欢迎赞赏支持：
+
+<img src="images/screenshot.jpg" width="200" />
