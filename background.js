@@ -3,6 +3,7 @@
 
 const OLLAMA_URL = 'http://localhost:11434';
 const VOLCENGINE_URL = 'https://ark.cn-beijing.volces.com/api/v3/chat/completions';
+const MIMO_URL = 'https://api.xiaomimimo.com/v1/chat/completions';
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'keepalive') {
@@ -15,8 +16,8 @@ chrome.runtime.onConnect.addListener((port) => {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'generateTags') {
-    console.log('[BG] generateTags 收到请求, lang:', request.lang, 'keywordCount:', request.keywordCount, 'imageData长度:', request.imageData?.length);
-    handleGenerateTags(request.imageData, request.lang, request.keywordCount)
+    console.log('[BG] generateTags 收到请求, lang:', request.lang, 'keywordCount:', request.keywordCount, 'imageData长度:', request.imageData?.length, 'imageUrl:', request.imageUrl?.substring(0, 80));
+    handleGenerateTags(request.imageData, request.imageUrl, request.lang, request.keywordCount)
       .then((result) => {
         console.log('[BG] generateTags 成功, title:', result.title?.substring(0, 40), 'keywords:', result.keywords?.substring(0, 60));
         sendResponse(result);
@@ -53,13 +54,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
-async function handleGenerateTags(imageBase64, lang, keywordCount) {
+async function handleGenerateTags(imageBase64, imageUrl, lang, keywordCount) {
   const config = await getConfig();
   console.log('[BG] 配置:', JSON.stringify({ provider: config.provider, apiKey: config.apiKey ? '已配置(' + config.apiKey.length + '字)' : '未配置', volcModel: config.volcModel || '未配置', model: config.model || '未配置' }));
   const provider = config.provider || 'volcengine';
 
   if (provider === 'volcengine') {
     return callVolcengine(imageBase64, lang, keywordCount, config);
+  }
+  if (provider === 'mimo') {
+    return callMimo(imageBase64, imageUrl, lang, keywordCount, config);
   }
   return callOllama(imageBase64, lang, keywordCount, config);
 }
@@ -179,9 +183,86 @@ async function callOllama(imageBase64, lang, keywordCount, config) {
   return parseAIResponse(content);
 }
 
+async function callMimo(imageBase64, imageUrl, lang, keywordCount, config) {
+  const apiKey = config.mimoApiKey;
+  if (!apiKey) {
+    throw new Error('未配置 Mimo API Key，请在扩展设置中填写');
+  }
+
+  const model = config.mimoModel || 'mimo-v2-omni';
+  const prompt = buildPrompt(lang, keywordCount);
+  console.log('[BG] callMimo 开始, model:', model, 'apiKey长度:', apiKey.length, 'imageBase64长度:', imageBase64?.length);
+
+  const resp = await fetch(MIMO_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'api-key': apiKey,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageBase64}` } },
+            { type: 'text', text: prompt },
+          ],
+        },
+      ],
+      stream: false,
+      max_completion_tokens: 1024,
+    }),
+  });
+
+  console.log('[BG] callMimo HTTP状态:', resp.status, resp.ok ? 'OK' : 'FAIL');
+
+  const rawText = await resp.text();
+  console.log('[BG] callMimo 原始响应长度:', rawText.length, '前200字:', rawText.substring(0, 200));
+
+  if (!resp.ok) {
+    let msg = rawText;
+    try { msg = JSON.parse(rawText).error?.message || JSON.parse(rawText).message || rawText; } catch {}
+    throw new Error(`Mimo API 错误 (${resp.status}): ${msg}`);
+  }
+
+  let data;
+  try {
+    data = JSON.parse(rawText);
+  } catch {
+    throw new Error('Mimo 返回非 JSON: ' + rawText.substring(0, 200));
+  }
+
+  const msg = data.choices?.[0]?.message;
+  let content = '';
+  if (msg) {
+    if (typeof msg.content === 'string') {
+      content = msg.content;
+    } else if (Array.isArray(msg.content)) {
+      content = msg.content.filter(c => c.type === 'text').map(c => c.text).join('');
+    }
+    if (!content) content = msg.reasoning_content || '';
+  }
+  console.log('[BG] callMimo choices内容长度:', content.length, 'reasoning长度:', msg?.reasoning_content?.length || 0, '前300字:', content.substring(0, 300));
+  if (!content || content.trim() === '') {
+    console.log('[BG] callMimo 完整响应:', rawText.substring(0, 500));
+    throw new Error('Mimo 返回为空，请检查 API Key 和模型是否正确');
+  }
+
+  content = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  console.log('[BG] callMimo 去思考后长度:', content.length, '前300字:', content.substring(0, 300));
+  if (!content) {
+    throw new Error('Mimo 返回内容仅含思考标签，无有效 JSON');
+  }
+
+  const parsed = parseAIResponse(content);
+  console.log('[BG] callMimo parseAIResponse 结果:', JSON.stringify({ title: parsed.title?.substring(0, 30), keywords: parsed.keywords?.substring(0, 60) }));
+  return parsed;
+}
+
 function getConfig() {
   return new Promise((resolve) => {
-    chrome.storage.sync.get(['provider', 'model', 'apiKey', 'lang', 'keywordCount', 'volcModel', 'defaultLocation'], resolve);
+    chrome.storage.sync.get(['provider', 'model', 'apiKey', 'lang', 'keywordCount', 'volcModel', 'defaultLocation', 'mimoApiKey', 'mimoModel'], resolve);
   });
 }
 

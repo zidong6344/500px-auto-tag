@@ -7,6 +7,7 @@ Chrome 浏览器扩展，为 500px CreatorStudio 自动生成 VCG（视觉中国
 | 服务 | 模型 | 速度 | 效果 | 成本 |
 |------|------|------|------|------|
 | **火山引擎豆包** | Doubao-Seed-1.6-flash | 1-2秒 | 优 | ~0.01元/张 |
+| **Mimo** | mimo-v2.5 | 2-5秒 | 优 | 按量计费 |
 | **Ollama 本地** | Qwen3-VL 4B/8B | 30-60秒 | 中 | 免费 |
 
 推荐使用**火山引擎豆包**，中文理解能力远超本地小模型，速度快且成本低。
@@ -32,6 +33,12 @@ Chrome 浏览器扩展，为 500px CreatorStudio 自动生成 VCG（视觉中国
    - 创建后获得 **Endpoint ID**（形如 `ep-xxxxxxxxx-xxxxx`）
 4. 获取 API Key：方舟平台 → API Key 管理 → 创建新 Key
 5. 在插件设置中填写 API Key 和 Endpoint ID
+
+## Mimo 配置
+
+1. 访问 Mimo 平台获取 API Key
+2. 在插件设置中选择 Mimo 服务
+3. 填写 API Key，选择模型（mimo-v2.5 或 mimo-v2.5-pro）
 
 ## Ollama 本地配置（备选）
 

@@ -3,11 +3,14 @@ const $ = (sel) => document.querySelector(sel);
 
 const providerGroup = document.querySelectorAll('input[name="provider"]');
 const volcSection = $('#volcSection');
+const mimoSection = $('#mimoSection');
 const ollamaSection = $('#ollamaSection');
 const modelEl = $('#model');
 const apiKeyEl = $('#apiKey');
 const ollamaApiKeyEl = $('#ollamaApiKey');
 const volcModelEl = $('#volcModel');
+const mimoApiKeyEl = $('#mimoApiKey');
+const mimoModelEl = $('#mimoModel');
 const keywordCountEl = $('#keywordCount');
 const defaultLocationEl = $('#defaultLocation');
 const defaultKeywordsEl = $('#defaultKeywords');
@@ -25,14 +28,10 @@ const FALLBACK_MODELS = [
 const VOLC_MODELS = [];
 
 function switchProvider(provider) {
-  if (provider === 'volcengine') {
-    volcSection.classList.add('section-visible');
-    ollamaSection.classList.remove('section-visible');
-  } else {
-    volcSection.classList.remove('section-visible');
-    ollamaSection.classList.add('section-visible');
-    fetchModels();
-  }
+  volcSection.classList.toggle('section-visible', provider === 'volcengine');
+  mimoSection.classList.toggle('section-visible', provider === 'mimo');
+  ollamaSection.classList.toggle('section-visible', provider === 'ollama');
+  if (provider === 'ollama') fetchModels();
 }
 
 providerGroup.forEach(radio => {
@@ -82,7 +81,7 @@ function formatSize(bytes) {
 function loadSettings() {
   try {
     chrome.storage.sync.get(
-      ['provider', 'model', 'apiKey', 'lang', 'keywordCount', 'defaultLocation', 'volcModel', 'defaultKeywords'],
+      ['provider', 'model', 'apiKey', 'lang', 'keywordCount', 'defaultLocation', 'volcModel', 'defaultKeywords', 'mimoApiKey', 'mimoModel'],
       (data) => {
         if (chrome.runtime.lastError) return;
         const provider = data.provider || 'volcengine';
@@ -105,6 +104,8 @@ function loadSettings() {
         if (data.keywordCount) keywordCountEl.value = data.keywordCount;
         if (data.defaultLocation) defaultLocationEl.value = data.defaultLocation;
         if (data.defaultKeywords) defaultKeywordsEl.value = data.defaultKeywords;
+        if (data.mimoApiKey) mimoApiKeyEl.value = data.mimoApiKey;
+        if (data.mimoModel) mimoModelEl.value = data.mimoModel;
         if (data.lang) {
           const langRadio = document.querySelector(`input[name="lang"][value="${data.lang}"]`);
           if (langRadio) langRadio.checked = true;
@@ -126,6 +127,8 @@ saveBtn.addEventListener('click', () => {
     volcModel: volcModelEl.value === 'custom' ? '' : volcModelEl.value,
     model: modelEl.value,
     ollamaApiKey: ollamaApiKeyEl.value.trim(),
+    mimoApiKey: mimoApiKeyEl.value.trim(),
+    mimoModel: mimoModelEl.value,
     lang,
     keywordCount: keywordCountEl.value,
     defaultLocation: defaultLocationEl.value.trim(),
@@ -134,6 +137,11 @@ saveBtn.addEventListener('click', () => {
 
   if (provider === 'volcengine' && !config.apiKey) {
     showStatus('❌ 请填写火山引擎 API Key', 'error');
+    return;
+  }
+
+  if (provider === 'mimo' && !config.mimoApiKey) {
+    showStatus('❌ 请填写 Mimo API Key', 'error');
     return;
   }
 

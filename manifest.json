@@ -10,7 +10,8 @@
     "https://*.aliyuncs.com/*",
     "https://*.500px.me/*",
     "http://localhost:11434/*",
-    "https://ark.cn-beijing.volces.com/*"
+    "https://ark.cn-beijing.volces.com/*",
+    "https://api.xiaomimimo.com/*"
   ],
   "action": {
     "default_popup": "popup.html",

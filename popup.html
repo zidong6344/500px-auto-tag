@@ -163,6 +163,11 @@
       <span>火山引擎豆包</span>
     </label>
     <label>
+      <input type="radio" name="provider" value="mimo" />
+      <span class="provider-icon">🤖</span>
+      <span>Mimo</span>
+    </label>
+    <label>
       <input type="radio" name="provider" value="ollama" />
       <span class="provider-icon">🦙</span>
       <span>Ollama 本地</span>
@@ -184,6 +189,28 @@
     <div class="info-box">
       <strong>豆包视觉模型</strong>：中文理解能力极佳，图库标题质量高，速度快（约2-5秒/张）<br/>
       费用：约 0.01-0.03 元/张，新用户有免费额度
+    </div>
+  </div>
+
+  <!-- Mimo 配置 -->
+  <div class="mimo-section" id="mimoSection">
+    <div class="section-divider"></div>
+
+    <label for="mimoApiKey">Mimo API Key</label>
+    <input type="password" id="mimoApiKey" placeholder="在 Mimo 平台获取 API Key" />
+    <p class="hint">获取方式：<a class="link" href="https://platform.xiaomimimo.com" target="_blank">Mimo 平台</a> → 创建 API Key</p>
+
+    <label for="mimoModel">Mimo 模型</label>
+    <select id="mimoModel">
+      <option value="mimo-v2-omni" selected>mimo-v2-omni（视觉理解·推荐）</option>
+      <option value="mimo-v2.5">mimo-v2.5</option>
+      <option value="mimo-v2.5-pro">mimo-v2.5-pro</option>
+    </select>
+    <p class="hint">支持视觉理解，中文效果好，速度快</p>
+
+    <div class="info-box">
+      <strong>Mimo 视觉模型</strong>：小米 AI 视觉模型，中文理解能力优秀<br/>
+      API 使用 api-key 头传递认证
     </div>
   </div>
 

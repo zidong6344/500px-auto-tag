@@ -293,10 +293,9 @@
       try {
         const card = cards[i];
         card.scrollIntoView({ block: 'center', behavior: 'instant' });
-        await sleep(400);
 
         clickNative(card);
-        await sleep(2000);
+        await waitForCondition(() => card.classList.contains('active') || card.querySelector('.active'), 3000, 200);
 
         if (shareAbort) break;
 
@@ -307,7 +306,7 @@
           if (imageBox) {
             console.log('[Share] 尝试点击父级 .item-image-box');
             clickNative(imageBox);
-            await sleep(1500);
+            await waitForCondition(() => card.classList.contains('active') || card.querySelector('.active'), 2000, 200);
           }
           const checked2 = card.classList.contains('active') || card.querySelector('.active');
           if (!checked2) {
@@ -320,7 +319,7 @@
         setShareProgress(`${i + 1}/${total} 寻找分享按钮...`);
 
         let shareBtn = null;
-        for (let retry = 0; retry < 10; retry++) {
+        for (let retry = 0; retry < 20; retry++) {
           const scrollContainers = document.querySelectorAll('[class*="right"] [class*="scroll"], [class*="right"] .ant-scroll, [class*="form"], .readonly-image, [class*="content-box"]');
           for (const sc of scrollContainers) {
             if (sc.scrollHeight > sc.clientHeight) {
@@ -335,7 +334,7 @@
           });
           shareBtn = findShareButton();
           if (shareBtn) break;
-          await sleep(500);
+          await sleep(200);
         }
         if (!shareBtn) {
           failCount++;
@@ -345,41 +344,33 @@
 
         console.log('[Share] 点击分享按钮:', shareBtn.tagName, shareBtn.textContent?.trim()?.substring(0, 20), 'rect:', shareBtn.getBoundingClientRect());
         shareBtn.focus();
-        await sleep(100);
         clickNative(shareBtn);
-        await sleep(2000);
 
         setShareProgress(`${i + 1}/${total} 等待确认弹窗...`);
 
-        let confirmBtn = null;
-        for (let retry = 0; retry < 8; retry++) {
+        const confirmBtn = await waitForCondition(() => {
           const modalBtns = document.querySelectorAll('.ant-modal-root button.ant-btn-primary, .ant-modal button.ant-btn-primary, .upload-success-dialog button.ant-btn-primary');
           for (const btn of modalBtns) {
             if (btn.closest('#px-autotag-btn')) continue;
             const text = (btn.textContent || '').trim();
             if (text.includes('分享') || text.includes('分 享') || text.includes('确认') || text.includes('确定')) {
-              confirmBtn = btn;
-              console.log('[Share] 弹窗确认按钮:', text, 'retry:', retry);
-              break;
+              return btn;
             }
           }
-          if (confirmBtn) break;
-          await sleep(1000);
-        }
+          return null;
+        }, 5000, 200);
+
         if (confirmBtn) {
           console.log('[Share] 找到确认按钮:', confirmBtn.textContent?.trim()?.substring(0, 20));
           confirmBtn.focus();
-          await sleep(100);
           clickNative(confirmBtn);
-          await sleep(1000);
+          await waitForGone('.ant-modal-root', 3000, 200);
         } else {
           console.log('[Share] ⚠️ 无确认弹窗');
         }
 
         successCount++;
         setShareProgress(`${i + 1}/${total} ✅ 分享成功`);
-
-        await sleep(500);
 
       } catch (err) {
         console.error('[Share] 卡片失败:', err);
@@ -477,6 +468,8 @@
     let successCount = 0;
     let failCount = 0;
 
+    const batchRetries = new Array(cards.length).fill(0);
+
     for (let i = 0; i < cards.length; i++) {
       if (batchAbort) {
         setStatus(`⏹ 已停止，完成 ${successCount}/${i} 张`, 'info');
@@ -488,11 +481,9 @@
       try {
         // 1. 滚动可见
         cards[i].scrollIntoView({ block: 'center', behavior: 'instant' });
-        await sleep(400);
 
         // 2. 模拟完整点击序列，确保 React 捕获
         const card = cards[i];
-        // 先点 card_item_hover_cover（React 的事件监听器可能在这里）
         const hoverCover = card.querySelector('[class*="hover_cover"]');
         if (hoverCover) {
           hoverCover.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
@@ -501,18 +492,14 @@
           hoverCover.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
           hoverCover.dispatchEvent(new MouseEvent('click', { bubbles: true }));
         }
-        // 再点 card-cover
         const cover = card.querySelector('[class*="cover"]');
         if (cover && cover !== hoverCover) {
           cover.dispatchEvent(new MouseEvent('click', { bubbles: true }));
         }
-        // 最后直接触发 card 上的 click
         card.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-        await sleep(1200);
-        if (batchAbort) break;
 
-        // 3. 等待 checked
-        const isChecked = await waitForChecked(cards[i], 5000);
+        // 3. 等待 checked 或 active
+        const isChecked = await waitForCondition(() => card.classList.contains('checked') || card.classList.contains('active'), 5000, 200);
         if (batchAbort) break;
         if (!isChecked) {
           failCount++;
@@ -524,7 +511,6 @@
         if (cards[i].querySelector('.canSubmit') || cards[i].classList.contains('canSubmit')) {
           successCount++;
           setBatchProgress(i + 1, cards.length, '⏭ 可提交，跳过');
-          await sleep(300);
           continue;
         }
 
@@ -537,7 +523,6 @@
         if (existingDesc && kwCount >= 5) {
           successCount++;
           setBatchProgress(i + 1, cards.length, `⏭ 已有 ${kwCount} 个标签，跳过`);
-          await sleep(300);
           continue;
         }
 
@@ -550,11 +535,14 @@
           continue;
         }
 
-        // 6. AI 分析
+        // 5. 获取图片
         setBatchProgress(i + 1, cards.length, 'AI 分析中...');
         let imgData;
         try {
-          const fetchResp = await sendMessageAsync({ action: 'fetchImage', url: imgUrl });
+          const fetchResp = await Promise.race([
+            sendMessageAsync({ action: 'fetchImage', url: imgUrl }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('获取图片超时')), 15000)),
+          ]);
           imgData = fetchResp.base64;
           if (batchAbort) break;
         } catch (e) {
@@ -568,30 +556,50 @@
           continue;
         }
 
-        const config = await new Promise((resolve) => {
-          chrome.storage.sync.get(['lang', 'keywordCount'], resolve);
+        // 6. AI 分析 + 并行填地点
+        const batchConfig = await new Promise((resolve) => {
+          chrome.storage.sync.get(['lang', 'keywordCount', 'defaultLocation'], resolve);
         });
+
+        const fillLocationPromise = batchConfig.defaultLocation
+          ? fillCascaderLocation(batchConfig.defaultLocation)
+          : Promise.resolve();
 
         const compressed = await compressImage(imgData, 1600, 0.8);
 
-        const result = await sendMessageAsync({
-          action: 'generateTags',
-          imageData: compressed,
-          lang: config.lang || 'zh',
-          keywordCount: config.keywordCount || 35,
-        });
+        const [result] = await Promise.all([
+          sendMessageAsync({
+            action: 'generateTags',
+            imageData: compressed,
+            imageUrl: imgUrl,
+            lang: batchConfig.lang || 'zh',
+            keywordCount: batchConfig.keywordCount || 35,
+          }),
+          fillLocationPromise,
+        ]);
         if (batchAbort) break;
 
-        // 6. 填入结果
+        // 6. 填入结果（带质量判断）
+        setBatchProgress(i + 1, cards.length, '检查结果质量...');
+
+        const quality = evaluateResult(result);
+        console.log('[Batch] 卡片', i + 1, '质量评分:', quality.score, '问题:', quality.issues);
+
+        if (quality.score < 50 && batchRetries[i] < 1) {
+          console.log('[Batch] 卡片', i + 1, '质量低，自动重试');
+          batchRetries[i]++;
+          setBatchProgress(i + 1, cards.length, '🔄 质量低，重新分析...');
+          i--;
+          continue;
+        }
+
         setBatchProgress(i + 1, cards.length, '填入信息...');
         await fillFields(result);
         if (batchAbort) break;
-        await sleep(500);
 
         successCount++;
         setBatchProgress(i + 1, cards.length, `✅ ${result.title || '完成'}`);
-        // 避免请求过快
-        await sleep(500);
+        await sleep(200);
 
       } catch (err) {
         console.error(`[Auto Tag] 卡片 ${i + 1} 失败:`, err);
@@ -790,25 +798,26 @@
   // 包装 sendMessage，失败自动重试一次
   function sendMessageAsync(msg) {
     return new Promise((resolve, reject) => {
-      const attempt = (retry) => {
-        chrome.runtime.sendMessage(msg, (resp) => {
-          if (chrome.runtime.lastError) {
-            if (retry) {
-              console.warn('[Auto Tag] sendMessage 失败，重试...', chrome.runtime.lastError.message);
-              setTimeout(() => attempt(false), 500);
-              return;
-            }
-            reject(new Error(chrome.runtime.lastError.message));
-          } else if (resp && resp.error) {
-            reject(new Error(resp.error));
-          } else if (resp) {
-            resolve(resp);
+      if (!chrome.runtime?.id) {
+        reject(new Error('扩展已更新，请刷新页面后重试'));
+        return;
+      }
+      chrome.runtime.sendMessage(msg, (resp) => {
+        if (chrome.runtime.lastError) {
+          const errMsg = chrome.runtime.lastError.message;
+          if (errMsg.includes('Extension context invalidated')) {
+            reject(new Error('扩展已更新，请刷新页面后重试'));
           } else {
-            reject(new Error('无响应'));
+            reject(new Error(errMsg));
           }
-        });
-      };
-      attempt(true);
+        } else if (resp && resp.error) {
+          reject(new Error(resp.error));
+        } else if (resp) {
+          resolve(resp);
+        } else {
+          reject(new Error('无响应'));
+        }
+      });
     });
   }
 
@@ -920,6 +929,8 @@
   }
 
   async function runAutoTag() {
+    let retryCount = 0;
+    while (retryCount < 3) {
     try {
       // 找选中卡片（checked class）→ 点击拦截 → 自动定位
       let imgUrl = null;
@@ -952,16 +963,28 @@
 
       setStatus('🔍 获取图片...', 'loading');
 
-      // 通过 background 获取图片（有 CORS 权限，且每次都拉最新图）
       let imgData;
       try {
-        const fetchResp = await sendMessageAsync({ action: 'fetchImage', url: imgUrl });
+        const fetchResp = await Promise.race([
+          sendMessageAsync({ action: 'fetchImage', url: imgUrl }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('获取图片超时')), 15000)),
+        ]);
         imgData = fetchResp.base64;
       } catch (e) {
-        console.warn('[Auto Tag] Background fetch failed, trying direct:', e.message);
-        const mainImg = getMainPreviewImage();
-        if (mainImg) {
-          imgData = await imageToBase64(mainImg);
+        console.warn('[AutoTag] Background fetch failed:', e.message, '| Trying imageToBase64...');
+        try {
+          const mainImg = getMainPreviewImage();
+          if (mainImg) imgData = await imageToBase64(mainImg);
+        } catch (e2) {
+          console.warn('[AutoTag] imageToBase64 also failed:', e2.message);
+        }
+        if (!imgData && imgUrl) {
+          try {
+            const tmpImg = document.querySelector(`img[src="${CSS.escape(imgUrl)}"]`) || document.querySelector('.ant-image-img');
+            if (tmpImg) imgData = await imageToBase64(tmpImg);
+          } catch (e3) {
+            console.warn('[AutoTag] img fallback also failed:', e3.message);
+          }
         }
       }
 
@@ -973,27 +996,45 @@
       console.log('[AutoTag] 获取图片成功, base64长度:', imgData.length);
 
       const config = await new Promise((resolve) => {
-        chrome.storage.sync.get(['lang', 'keywordCount'], resolve);
+        chrome.storage.sync.get(['lang', 'keywordCount', 'defaultLocation'], resolve);
       });
       console.log('[AutoTag] 配置: lang:', config.lang, 'keywordCount:', config.keywordCount);
 
       setStatus('🤖 AI 分析中...', 'loading');
 
       imgData = await compressImage(imgData, 1600, 0.8);
-      console.log('[AutoTag] 压缩后base64长度:', imgData.length);
 
-      // 3. 调用 AI
-      const result = await sendMessageAsync({
-        action: 'generateTags',
-        imageData: imgData,
-        lang: config.lang || 'zh',
-        keywordCount: config.keywordCount || 35,
-      });
+      const fillLocationPromise = config.defaultLocation
+        ? fillCascaderLocation(config.defaultLocation)
+        : Promise.resolve();
 
-      // 4. 填入结果
+      const [result] = await Promise.all([
+        sendMessageAsync({
+          action: 'generateTags',
+          imageData: imgData,
+          imageUrl: imgUrl,
+          lang: config.lang || 'zh',
+          keywordCount: config.keywordCount || 35,
+        }),
+        fillLocationPromise,
+      ]);
+
+      // 4. 填入结果（带质量判断）
       console.log('[AutoTag] AI返回结果:', JSON.stringify(result).substring(0, 100));
+
+      const quality = evaluateResult(result);
+      console.log('[AutoTag] 质量评分:', quality.score, '问题:', quality.issues);
+
+      if (quality.score < 50 && retryCount < 2) {
+        console.log('[AutoTag] 质量低，自动重试 (', retryCount + 1, '/2)');
+        setStatus('🔄 质量低，重新分析...', 'loading');
+        retryCount++;
+        continue;
+      }
+
       fillFields(result);
-      setStatus('✅ 已生成！标题: ' + (result.title || ''), 'success');
+      setStatus('✅ 已生成！标题: ' + (cleanTitle(result.title || '') || ''), 'success');
+      break;
 
     } catch (err) {
       console.error('[500px Auto Tag] Error:', err);
@@ -1008,7 +1049,10 @@
       const thumbs = getAllThumbnails();
       if (thumbs.length > 0) {
         await selectThumbnail(thumbs[0]);
-        await sleep(1000); // 等待主图加载
+        await waitForCondition(() => {
+          const mainImg = getMainPreviewImage();
+          return mainImg && mainImg.complete && mainImg.naturalWidth > 100;
+        }, 3000, 200);
       }
 
       // 获取主预览区的大图 URL
@@ -1066,19 +1110,11 @@
     // 统一用 background fetch（有 CORS 权限，不受 tainted canvas 影响）
     if (src) {
       try {
-        const resp = await new Promise((resolve, reject) => {
-          chrome.runtime.sendMessage(
-            { action: 'fetchImage', url: src },
-            (r) => {
-              if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-              else if (r && r.error) reject(new Error(r.error));
-              else if (r && r.base64) resolve(r.base64);
-              else reject(new Error('empty response'));
-            }
-          );
-        });
-        return resp;
+        if (!chrome.runtime?.id) throw new Error('扩展已更新，请刷新页面');
+        const resp = await sendMessageAsync({ action: 'fetchImage', url: src });
+        return resp.base64;
       } catch (e) {
+        console.warn('[AutoTag] background fetch failed:', e.message);
       }
     }
 
@@ -1125,11 +1161,11 @@
     if (descEl) {
       let descText = '';
       if (isCreatorStudio) {
-        descText = (result.title || '').substring(0, 50);
+        descText = cleanTitle(result.title || '');
       } else if (result.title && result.description) {
-        descText = `${result.title} - ${result.description}`;
+        descText = `${cleanTitle(result.title)} - ${result.description}`;
       } else if (result.title) {
-        descText = result.title;
+        descText = cleanTitle(result.title);
       } else if (result.description) {
         descText = result.description;
       }
@@ -1151,8 +1187,8 @@
 
     if (result.keywords) {
       const raw = String(result.keywords);
-      const keywords = raw.split(/[,，、;；\s\n]+/).map(k => k.trim()).filter(Boolean);
-      console.log('[KW] 解析后:', keywords.length, '个, 前5:', keywords.slice(0, 5), '默认:', defaults.length, '个, AI上限:', maxAI);
+      const keywords = cleanKeywords(raw);
+      console.log('[KW] 清洗后:', keywords.length, '个, 前5:', keywords.slice(0, 5), '默认:', defaults.length, '个, AI上限:', maxAI);
       keywords.push(...defaults);
       console.log('[KW] 合计:', keywords.length, '个');
       if (keywords.length > 0) {
@@ -1166,15 +1202,15 @@
     } else {
       console.log('[KW] ⚠️ result.keywords 为空');
     }
-    if (config.defaultLocation) {
-      await fillCascaderLocation(config.defaultLocation);
-    }
   }
 
   // 逐个填入关键词并触发回车（500px 标签输入需要回车确认）
   async function fillKeywordsSequentially(el, keywords) {
     clearExistingKeywords();
-    await sleep(300);
+    await waitForCondition(() => {
+      const tags = document.querySelectorAll('.ant-tag .anticon-close, .ant-tag-close-icon, .ant-tag .anticon-close-circle, [class*="keyword"] [class*="close"]');
+      return tags.length === 0;
+    }, 1000, 100);
 
     const kwSelectors = isCreatorStudio
       ? [
@@ -1219,22 +1255,107 @@
     console.log('[KW] 找到输入框:', input.tagName, input.className?.substring(0, 40), 'placeholder:', input.placeholder);
 
     input.focus();
-    await sleep(100);
+    await sleep(50);
 
     const combined = keywords.join(',');
     console.log('[KW] 一次性填入, 总长:', combined.length, '前60字:', combined.substring(0, 60));
     setNativeValue(input, combined);
-    await sleep(100);
+    await sleep(50);
 
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
     input.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
     input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-    await sleep(300);
+    await waitForCondition(() => {
+      const tags = document.querySelectorAll('.ant-tag, [class*="keyword"] [class*="tag"]');
+      return tags.length > 0;
+    }, 2000, 100);
 
     console.log('[KW] ✅ 填入完成, 共', keywords.length, '个关键词');
   }
 
   // 清除已有关键词标签
+  function cleanKeywords(raw) {
+    let text = raw
+      .replace(/[0-9]+\.\s*/g, ',')
+      .replace(/[\(（][^）\)]*[\)）]/g, '')
+      .replace(/\*\*[^*]*\*\*/g, '')
+      .replace(/—.*$/gm, '');
+
+    const stopPatterns = [
+      /禁止.*?[,，]/g, /必须.*?[,，]/g, /覆盖.*?[,，]/g,
+      /每个关键词.*?[,，]/g, /精准中文关键词.*?[,，]/g, /逗号分隔.*?[,，]/g,
+      /来自照片.*?[,，]/g, /具体内容.*?[,，]/g, /空洞概念词.*?[,，]/g,
+      /泛词.*?[,，]/g, /具体事物或特征/g, /看得见/g, /照片中/g,
+      /列出照片.*?[:：]/g, /可见的/g,
+    ];
+    for (const p of stopPatterns) {
+      text = text.replace(p, ',');
+    }
+
+    return text
+      .split(/[,，、;；\s\n]+/)
+      .map(k => k.trim().replace(/^\*+/, ''))
+      .filter(k => k.length >= 2 && k.length <= 12)
+      .filter(k => !/^(关键词|描述|标题|要求|规则|说明|注|注意|提示|格式|风格|必须|禁止|不要|避免|覆盖|维度|每个|精准|逗号|来自|具体|空洞|泛词|事物|特征|看得见|可见|中文|英文|逗号分隔|列出|内容|照片|以上|以下|包括)$/.test(k));
+  }
+
+  function evaluateResult(result) {
+    let score = 100;
+    const issues = [];
+
+    const title = cleanTitle(result.title || '');
+    const keywords = result.keywords ? cleanKeywords(String(result.keywords)) : [];
+
+    if (!title || title.length < 5) {
+      score -= 40;
+      issues.push('标题太短或为空');
+    }
+
+    if (title.length > 50) {
+      score -= 15;
+      issues.push('标题过长');
+    }
+
+    if (keywords.length < 5) {
+      score -= 30;
+      issues.push('关键词太少(' + keywords.length + '个)');
+    }
+
+    if (keywords.length < 3) {
+      score -= 30;
+      issues.push('关键词严重不足');
+    }
+
+    if (keywords.some(k => k.includes('关键词') || k.includes('标题') || k.includes('描述') || k.includes('禁止') || k.includes('必须'))) {
+      score -= 25;
+      issues.push('关键词含prompt泄漏');
+    }
+
+    if (title && (title.startsWith('-') || title.startsWith('主体') || title.includes('禁止') || title.includes('必须'))) {
+      score -= 20;
+      issues.push('标题含prompt泄漏');
+    }
+
+    if (!result.description && !title) {
+      score -= 20;
+      issues.push('无描述也无标题');
+    }
+
+    return { score: Math.max(0, score), issues };
+  }
+
+  function cleanTitle(title) {
+    return title
+      .replace(/^[-–—]\s*/g, '')
+      .replace(/^\*+[^*]*\*+\s*/g, '')
+      .replace(/^主体[：:]\s*/g, '')
+      .replace(/^标题[：:]\s*/g, '')
+      .replace(/^title[：:]\s*/gi, '')
+      .replace(/^[0-9]+\.\s*/g, '')
+      .trim()
+      .substring(0, 50);
+  }
+
   function clearExistingKeywords() {
     // 500px.com.cn: 点击每个标签的删除按钮
     const closeBtns = document.querySelectorAll(
@@ -1349,19 +1470,20 @@
       const selector = cascader.querySelector('.ant-select-selector') || cascader;
       selector.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     }
-    await sleep(800);
+    await waitForElement('.ant-cascader-dropdown:not(.ant-select-dropdown-hidden)', 3000, 100);
 
-    // 检查下拉是否打开
-    const dropdownOpen = document.querySelector('.ant-cascader-dropdown:not(.ant-select-dropdown-hidden)');
-
-    // 逐级点击
     for (let level = 0; level < path.length; level++) {
       const target = path[level];
       const clicked = await clickCascaderOption(target);
       if (!clicked) {
         break;
       }
-      await sleep(400);
+      if (level < path.length - 1) {
+        await waitForCondition(() => {
+          const menus = document.querySelectorAll('.ant-cascader-menu');
+          return menus.length > level + 1;
+        }, 2000, 100);
+      }
     }
 
     // 关闭下拉（点其他地方）
@@ -1385,6 +1507,34 @@
 
   function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  function waitForCondition(fn, timeout = 5000, interval = 100) {
+    return new Promise((resolve) => {
+      const result = fn();
+      if (result) { resolve(result); return; }
+      const start = Date.now();
+      const timer = setInterval(() => {
+        const r = fn();
+        if (r) { clearInterval(timer); resolve(r); }
+        else if (Date.now() - start > timeout) { clearInterval(timer); resolve(null); }
+      }, interval);
+    });
+  }
+
+  function waitForElement(selector, timeout = 5000, interval = 100) {
+    return waitForCondition(() => document.querySelector(selector), timeout, interval);
+  }
+
+  function waitForGone(selector, timeout = 3000, interval = 100) {
+    return new Promise((resolve) => {
+      if (!document.querySelector(selector)) { resolve(true); return; }
+      const start = Date.now();
+      const timer = setInterval(() => {
+        if (!document.querySelector(selector)) { clearInterval(timer); resolve(true); }
+        else if (Date.now() - start > timeout) { clearInterval(timer); resolve(false); }
+      }, interval);
+    });
   }
 
   // 等待图片加载完成
@@ -1422,21 +1572,49 @@
 
     const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
 
+    el.focus();
+    el.dispatchEvent(new Event('focus', { bubbles: true }));
+
+    // 方式1: React value setter
     if (setter) {
       setter.call(el, value);
     } else {
       el.value = value;
     }
 
-    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
-    el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
-    el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }));
 
-    el.focus();
-    el.dispatchEvent(new Event('focus', { bubbles: true }));
-    el.blur();
-    el.dispatchEvent(new Event('blur', { bubbles: true }));
+    // 方式2: 如果 React 重置了，用 execCommand
+    if (el.value !== value) {
+      console.log('[SET] React重置了value，尝试execCommand');
+      el.focus();
+      el.value = '';
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContent' }));
+      document.execCommand('selectAll', false, null);
+      document.execCommand('insertText', false, value);
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    // 方式3: 如果 execCommand 也失败，直接用 clipboard paste
+    if (el.value !== value) {
+      console.log('[SET] execCommand也失败，尝试clipboard paste');
+      el.focus();
+      el.value = '';
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContent' }));
+      try {
+        const dt = new DataTransfer();
+        dt.setData('text/plain', value);
+        const pasteEvent = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt });
+        el.dispatchEvent(pasteEvent);
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste', data: value }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      } catch (e) {
+        console.log('[SET] clipboard paste failed:', e.message);
+      }
+    }
+
     console.log('[SET] setNativeValue 完成, el.value现在:', el.value?.substring(0, 30));
   }
 
@@ -1462,10 +1640,11 @@
   let keepAlivePort;
   let keepAliveTimer;
   function connectKeepAlive() {
+    if (!chrome.runtime?.id) return;
     try { keepAlivePort = chrome.runtime.connect({ name: 'keepalive' }); } catch { return; }
     keepAlivePort.onDisconnect.addListener(() => {
       clearInterval(keepAliveTimer);
-      setTimeout(connectKeepAlive, 2000);
+      if (chrome.runtime?.id) setTimeout(connectKeepAlive, 2000);
     });
     keepAliveTimer = setInterval(() => {
       try { keepAlivePort?.postMessage({ ping: true }); } catch {}
