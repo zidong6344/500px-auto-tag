@@ -1040,6 +1040,7 @@
       console.error('[500px Auto Tag] Error:', err);
       setStatus('❌ ' + err.message, 'error');
     }
+    }
   }
 
   // ===== 图片 URL 提取 =====
