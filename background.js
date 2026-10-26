@@ -1,9 +1,8 @@
 // background.js — 500px Auto Tag 后台服务
-// 支持火山引擎豆包视觉模型 + 本地 Ollama
+// 支持火山引擎方舟 Coding Plan 视觉模型 + 本地 Ollama
 
 const OLLAMA_URL = 'http://localhost:11434';
-const VOLCENGINE_URL = 'https://ark.cn-beijing.volces.com/api/v3/chat/completions';
-const MIMO_URL = 'https://api.xiaomimimo.com/v1/chat/completions';
+const VOLCENGINE_URL = 'https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions';
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'keepalive') {
@@ -17,7 +16,7 @@ chrome.runtime.onConnect.addListener((port) => {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'generateTags') {
     console.log('[BG] generateTags 收到请求, lang:', request.lang, 'keywordCount:', request.keywordCount, 'imageData长度:', request.imageData?.length, 'imageUrl:', request.imageUrl?.substring(0, 80));
-    handleGenerateTags(request.imageData, request.imageUrl, request.lang, request.keywordCount)
+    handleGenerateTags(request.imageData, request.imageUrl, request.lang, request.keywordCount, request.location, request.locationHint)
       .then((result) => {
         console.log('[BG] generateTags 成功, title:', result.title?.substring(0, 40), 'keywords:', result.keywords?.substring(0, 60));
         sendResponse(result);
@@ -54,21 +53,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
-async function handleGenerateTags(imageBase64, imageUrl, lang, keywordCount) {
+async function handleGenerateTags(imageBase64, imageUrl, lang, keywordCount, location, locationHint) {
   const config = await getConfig();
-  console.log('[BG] 配置:', JSON.stringify({ provider: config.provider, apiKey: config.apiKey ? '已配置(' + config.apiKey.length + '字)' : '未配置', volcModel: config.volcModel || '未配置', model: config.model || '未配置' }));
+  const loc = location || '';
+  const locHint = locationHint || '';
+  console.log('[BG] 配置:', JSON.stringify({ provider: config.provider, apiKey: config.apiKey ? '已配置(' + config.apiKey.length + '字)' : '未配置', volcModel: config.volcModel || '未配置', model: config.model || '未配置', location: loc || '未设置', locationHint: locHint || '未设置' }));
   const provider = config.provider || 'volcengine';
 
   if (provider === 'volcengine') {
-    return callVolcengine(imageBase64, lang, keywordCount, config);
+    return callVolcengine(imageBase64, lang, keywordCount, loc, config, locHint);
   }
-  if (provider === 'mimo') {
-    return callMimo(imageBase64, imageUrl, lang, keywordCount, config);
-  }
-  return callOllama(imageBase64, lang, keywordCount, config);
+  return callOllama(imageBase64, lang, keywordCount, loc, config, locHint);
 }
 
-async function callVolcengine(imageBase64, lang, keywordCount, config) {
+async function callVolcengine(imageBase64, lang, keywordCount, location, config, locationHint) {
   const apiKey = config.apiKey;
   if (!apiKey) {
     throw new Error('未配置火山引擎 API Key，请在扩展设置中填写');
@@ -76,9 +74,9 @@ async function callVolcengine(imageBase64, lang, keywordCount, config) {
 
   const model = config.volcModel;
   if (!model) {
-    throw new Error('未配置模型 Endpoint ID，请在扩展设置中填写方舟平台的接入点 ID（格式如 ep-xxxxxxxxx-xxxxx），不是模型显示名');
+    throw new Error('未配置模型，请在扩展设置中选择 Coding Plan 模型（如 doubao-seed-2.1-pro）');
   }
-  const prompt = buildPrompt(lang, keywordCount);
+  const prompt = buildPrompt(lang, keywordCount, location, locationHint);
   console.log('[BG] callVolcengine 开始, model:', model, 'apiKey长度:', apiKey.length, 'imageData长度:', imageBase64?.length);
 
   const resp = await fetch(VOLCENGINE_URL, {
@@ -96,12 +94,15 @@ async function callVolcengine(imageBase64, lang, keywordCount, config) {
             { type: 'text', text: prompt },
             {
               type: 'image_url',
-              image_url: { url: `data:image/jpeg;base64,${imageBase64}` },
+              image_url: { url: `data:image/jpeg;base64,${imageBase64}`, detail: 'auto' },
             },
           ],
         },
       ],
       stream: false,
+      max_tokens: 700,
+      // 关闭深度思考：思考token会占用max_tokens且拖慢响应（实测96s→6s）
+      thinking: { type: 'disabled' },
     }),
   });
 
@@ -136,13 +137,14 @@ async function callVolcengine(imageBase64, lang, keywordCount, config) {
   }
 
   const parsed = parseAIResponse(content);
+  chrome.storage.local.set({ __lastResult: { raw: content.slice(0, 2000), parsed, rawLen: content.length } }); // 调试用（持久，SW重启不丢）
   console.log('[BG] parseAIResponse 结果:', JSON.stringify({ title: parsed.title?.substring(0, 30), description: parsed.description?.substring(0, 30), keywords: parsed.keywords?.substring(0, 60) }));
   return parsed;
 }
 
-async function callOllama(imageBase64, lang, keywordCount, config) {
+async function callOllama(imageBase64, lang, keywordCount, location, config, locationHint) {
   const model = config.model || 'qwen3-vl:4b';
-  const prompt = buildPrompt(lang, keywordCount);
+  const prompt = buildPrompt(lang, keywordCount, location, locationHint);
 
   const resp = await fetch(`${OLLAMA_URL}/api/chat`, {
     method: 'POST',
@@ -183,137 +185,43 @@ async function callOllama(imageBase64, lang, keywordCount, config) {
   return parseAIResponse(content);
 }
 
-async function callMimo(imageBase64, imageUrl, lang, keywordCount, config) {
-  const apiKey = config.mimoApiKey;
-  if (!apiKey) {
-    throw new Error('未配置 Mimo API Key，请在扩展设置中填写');
-  }
-
-  const model = config.mimoModel || 'mimo-v2-omni';
-  const prompt = buildPrompt(lang, keywordCount);
-  console.log('[BG] callMimo 开始, model:', model, 'apiKey长度:', apiKey.length, 'imageBase64长度:', imageBase64?.length);
-
-  const resp = await fetch(MIMO_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'api-key': apiKey,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageBase64}` } },
-            { type: 'text', text: prompt },
-          ],
-        },
-      ],
-      stream: false,
-      max_completion_tokens: 1024,
-    }),
-  });
-
-  console.log('[BG] callMimo HTTP状态:', resp.status, resp.ok ? 'OK' : 'FAIL');
-
-  const rawText = await resp.text();
-  console.log('[BG] callMimo 原始响应长度:', rawText.length, '前200字:', rawText.substring(0, 200));
-
-  if (!resp.ok) {
-    let msg = rawText;
-    try { msg = JSON.parse(rawText).error?.message || JSON.parse(rawText).message || rawText; } catch {}
-    throw new Error(`Mimo API 错误 (${resp.status}): ${msg}`);
-  }
-
-  let data;
-  try {
-    data = JSON.parse(rawText);
-  } catch {
-    throw new Error('Mimo 返回非 JSON: ' + rawText.substring(0, 200));
-  }
-
-  const msg = data.choices?.[0]?.message;
-  let content = '';
-  if (msg) {
-    if (typeof msg.content === 'string') {
-      content = msg.content;
-    } else if (Array.isArray(msg.content)) {
-      content = msg.content.filter(c => c.type === 'text').map(c => c.text).join('');
-    }
-    if (!content) content = msg.reasoning_content || '';
-  }
-  console.log('[BG] callMimo choices内容长度:', content.length, 'reasoning长度:', msg?.reasoning_content?.length || 0, '前300字:', content.substring(0, 300));
-  if (!content || content.trim() === '') {
-    console.log('[BG] callMimo 完整响应:', rawText.substring(0, 500));
-    throw new Error('Mimo 返回为空，请检查 API Key 和模型是否正确');
-  }
-
-  content = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-  console.log('[BG] callMimo 去思考后长度:', content.length, '前300字:', content.substring(0, 300));
-  if (!content) {
-    throw new Error('Mimo 返回内容仅含思考标签，无有效 JSON');
-  }
-
-  const parsed = parseAIResponse(content);
-  console.log('[BG] callMimo parseAIResponse 结果:', JSON.stringify({ title: parsed.title?.substring(0, 30), keywords: parsed.keywords?.substring(0, 60) }));
-  return parsed;
-}
-
 function getConfig() {
   return new Promise((resolve) => {
-    chrome.storage.sync.get(['provider', 'model', 'apiKey', 'lang', 'keywordCount', 'volcModel', 'defaultLocation', 'mimoApiKey', 'mimoModel'], resolve);
+    chrome.storage.sync.get(['provider', 'model', 'apiKey', 'lang', 'keywordCount', 'volcModel'], resolve);
   });
 }
 
-function buildPrompt(lang, keywordCount) {
+function buildPrompt(lang, keywordCount, location, locationHint) {
   const count = keywordCount || 35;
+  const kwHint = location
+    ? `\n## 指定关键词\n请在标题中自然融入以下关键词：**${location}**。标题中必须包含这些词（如"${location}的..."或"...的${location}"），并在关键词列表中也包含这些词。\n`
+    : '';
   if (lang === 'zh') {
-    return `你是视觉中国（VCG）的资深图库编辑，专门为商业摄影作品撰写图库级标题和关键词。
+    return `你是视觉中国图库编辑，为照片写标题和关键词。
+${kwHint}
+标题规则：15-30字长句，包含主体+场景+光线/氛围，具体不空洞，陈述句，不用"美丽""漂亮"等词。
+示例："黄昏时分航拍上海陆家嘴天际线 落日余晖映照在玻璃幕墙上"
 
-## 视觉中国标题规则
+分析照片生成：
+1. title：15-30字标题
+2. keywords：${count}个精准中文关键词，逗号分隔，必须是照片中看得见的具体事物（物体名称、部件、材质、颜色、数量、位置），禁止抽象泛词（如：风景、自然、旅行、风光、美景、氛围、光影、天空之美、度假、美丽）
+3. location：推断拍摄地，格式"省份 地级行政区"，如"青海省 海西"、"甘肃省 酒泉"。第二部分必须是地级行政区（地级市/自治州/地区/盟），禁止县级市、县、区、景区名（例如格尔木是县级市，应写其上级"海西"州；茶卡盐湖是景区，应写"海西"）${locationHint ? `。参考范围：照片拍摄于【${locationHint}】一带，location 必须从该区域的行政区划中选择，若画面明显不属于该区域或无法判断，返回""` : '，无法判断返回""'}
 
-**必须是长句，15-30字**，结构通常为：[主体] + [动作/状态] + [场景/环境] + [光线/氛围/季节]
-
-**常见格式参考：**
-- 主体 + 动作 + 场景 + 光影："一只白鹭在夕阳下的湿地浅滩中低头觅食 金色水面波光粼粼"
-- 季节 + 地点 + 主体 + 氛围："初冬清晨的杭州西湖断桥残雪 晨雾中游人撑着红伞漫步"
-- 主体 + 近景 + 远景 + 光线："盛开的粉色荷花特写 背景是雨后朦胧的荷塘与穿透云层的柔光"
-- 俯拍/仰拍 + 城市 + 时间 + 特点："黄昏时分航拍上海陆家嘴天际线 落日余晖映照在玻璃幕墙上的金色反光"
-- 时间 + 主体 + 环境 + 情绪："深夜雨后的城市街道 霓虹灯倒映在湿润的柏油路面上 一名行人撑伞匆匆走过"
-
-**标题写作要点：**
-1. 必须具体到能脑补出画面，不能泛泛而谈（不能说"风景"，要说"秋季喀纳斯的金色白桦林"）
-2. 必须包含光线/天气/时间中的至少一项（清晨、黄昏、雨后、雾天、逆光、剪影、星空等）
-3. 有人物时必须描述动作和神态
-4. 使用图库专业词汇：光影、倒影、剪影、特写、全景、俯拍、仰拍、微距、慢门、长曝光
-5. 不要用"美丽""漂亮""好看"等空洞形容词
-6. 标题是陈述句，不加引号不感叹
-
-请仔细分析这张照片的每个细节（主体、构图、光线、色彩、环境、情绪），然后生成：
-
-1. **title**：严格按照上述规则的视觉中国风格标题，15-30字
-2. **description**：一句话概括画面，30字以内
-3. **keywords**：${count}个精准中文关键词，逗号分隔。必须来自照片中的具体内容，禁止使用任何泛词（如：光线、光影、情绪、氛围、构图、色彩、美感、自然、风景等空洞概念词）。每个关键词都要是照片里看得见的具体事物或特征
-
-只返回 JSON，不要任何额外文字：
-{"title": "...", "description": "...", "keywords": "..., ..."}`;
+只返回JSON（location必须在keywords之前，不要description）：{"title":"...","location":"省份 城市","keywords":"..."}`;
   }
-  return `You are a professional stock photography editor specializing in metadata for platforms like 500px and Visual China Group (VCG).
+  const kwHintEn = location
+    ? `\n## Required Keywords\nThe following keywords MUST appear in the title: **${location}**. Naturally weave them into the title (e.g. "${location} ..." or "... of ${location}"), and also include them in the keywords list.\n`
+    : '';
+  return `You are a stock photo editor writing titles and keywords.
+${kwHintEn}
+Title: 10-20 words, include subject+scene+lighting, specific not vague.
 
-VCG-style titles are:
-- Descriptive and specific, typically 10-20 words
-- Include subject, action, scene, lighting, mood
-- Example: "Golden reeds swaying by the lake at sunset with warm light" or "Busy neon-lit intersection in a modern city at night"
+Analyze and return JSON only:
+1. title: 10-20 word descriptive title
+2. keywords: ${count} specific visible keywords, comma-separated, name concrete objects/parts/materials/colors/positions; BAN abstract words (e.g. landscape, nature, travel, beauty, mood, vacation)
+3. location: administrative divisions only, format "Province Prefecture-level division" (e.g. "Qinghai Haixi", "Gansu Jiuquan"). The second part MUST be a prefecture-level division (prefecture-level city / autonomous prefecture); NO county-level cities, counties, districts or scenic spots (e.g. Golmud is a county-level city, use its parent "Haixi"; Chaka Salt Lake is a scenic spot, use "Haixi")${locationHint ? `; Reference area: photos were taken around [${locationHint}], location MUST be an administrative division within that area, return "" if the scene clearly does not belong there or is unidentifiable` : '; empty string if unsure'}
 
-Analyze this photo carefully and generate:
-
-1. **Title**: A VCG-style descriptive English title (10-20 words) covering subject, scene, lighting, and atmosphere
-2. **Description**: A brief English description (under 150 characters) with additional context
-3. **Keywords**: ${count} precise English keywords, comma-separated. Must be specific visible content from this photo. Forbidden: generic words like lighting, mood, atmosphere, composition, color, beauty, nature, landscape, texture, tone, contrast
-
-Return ONLY valid JSON, no other text:
-{"title": "Title here", "description": "Description here", "keywords": "keyword1,keyword2,keyword3"}`;
+{"title":"...","location":"Province City","keywords":"..."}`;
 }
 
 function cleanKeywords(kw) {

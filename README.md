@@ -6,11 +6,10 @@ Chrome 浏览器扩展，为 500px CreatorStudio 自动生成 VCG（视觉中国
 
 | 服务 | 模型 | 速度 | 效果 | 成本 |
 |------|------|------|------|------|
-| **火山引擎豆包** | Doubao-Seed-1.6-flash | 1-2秒 | 优 | ~0.01元/张 |
-| **Mimo** | mimo-v2.5 | 2-5秒 | 优 | 按量计费 |
+| **火山引擎 Coding Plan** | doubao-seed-2.1-pro | 1-3秒 | 优 | 包月订阅 |
 | **Ollama 本地** | Qwen3-VL 4B/8B | 30-60秒 | 中 | 免费 |
 
-推荐使用**火山引擎豆包**，中文理解能力远超本地小模型，速度快且成本低。
+推荐使用**火山引擎 Coding Plan**，中文理解能力强，支持图片理解，包月不限调用。
 
 ## 功能
 
@@ -24,21 +23,13 @@ Chrome 浏览器扩展，为 500px CreatorStudio 自动生成 VCG（视觉中国
 - **默认关键词**：设置默认关键词，每张图片都会追加（AI 关键词自动缩减数量以保证总上限）
 - **关键词上限**：默认 35 个关键词（含默认关键词）
 
-## 火山引擎豆包配置
+## 火山引擎 Coding Plan 配置
 
 1. 注册火山引擎账号：https://console.volcengine.com
 2. 进入方舟（Ark）平台：https://console.volcengine.com/ark
-3. 创建推理接入点：
-   - 选择模型 `Doubao-Seed-1.6-flash`
-   - 创建后获得 **Endpoint ID**（形如 `ep-xxxxxxxxx-xxxxx`）
+3. 开通 **Coding Plan** 订阅
 4. 获取 API Key：方舟平台 → API Key 管理 → 创建新 Key
-5. 在插件设置中填写 API Key 和 Endpoint ID
-
-## Mimo 配置
-
-1. 访问 Mimo 平台获取 API Key
-2. 在插件设置中选择 Mimo 服务
-3. 填写 API Key，选择模型（mimo-v2.5 或 mimo-v2.5-pro）
+5. 在插件设置中选择「火山引擎豆包」，填写 API Key，选择模型（推荐 `doubao-seed-2.1-pro`）
 
 ## Ollama 本地配置（备选）
 
@@ -63,7 +54,7 @@ ollama pull qwen3-vl:4b
 ## 注意事项
 
 - 火山引擎 API Key 必须填写，否则无法调用
-- 火山引擎的 Endpoint ID 不是模型名称，是在方舟平台创建推理接入点后获得的
+- Coding Plan 使用模型名称（如 `doubao-seed-2.1-pro`），无需创建推理接入点
 - Ollama 必须设置 `OLLAMA_ORIGINS=*`，否则扩展请求会被 403 拒绝
 - 批量处理会按顺序依次处理，可随时点「停止」
 

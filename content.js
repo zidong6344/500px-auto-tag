@@ -211,7 +211,7 @@
     el.className = `px-autotag-status ${type}`;
     el.style.display = 'block';
     if (type !== 'loading') {
-      setTimeout(() => { el.style.display = 'none'; }, 5000);
+      setTimeout(() => { el.style.display = 'none'; }, type === 'error' ? 15000 : 5000);
     }
   }
 
@@ -446,6 +446,25 @@
     }
   }
 
+  // 读取地点级联选择器当前已填值（如"中国 / 青海省 / 海西"），空表示未填
+  function readCascaderValue() {
+    const cascader = document.querySelector('.ant-cascader, .ant-select.ant-cascader, [class*="cascader"]');
+    if (!cascader) return '';
+    const item = cascader.querySelector('.ant-select-selection-item');
+    if (item?.textContent?.trim()) return item.textContent.trim();
+    const input = cascader.querySelector('input');
+    return input?.value?.trim() || '';
+  }
+
+  // 检查卡片是否达到"可提交"状态（500px 卡片出现 canSubmit 标记）
+  async function checkCardSubmittable(card) {
+    // 轮询等待标记出现（通常几十毫秒内出现），最多等 1.2s
+    return await waitForCondition(
+      () => !!(card.querySelector('.canSubmit') || card.classList.contains('canSubmit')),
+      1200, 50
+    );
+  }
+
   async function batchProcessAll() {
     let cards = document.querySelectorAll('.sole-image-item');
     if (cards.length === 0) {
@@ -470,51 +489,184 @@
 
     const batchRetries = new Array(cards.length).fill(0);
 
-    for (let i = 0; i < cards.length; i++) {
-      if (batchAbort) {
-        setStatus(`⏹ 已停止，完成 ${successCount}/${i} 张`, 'info');
-        break;
+    // ===== 辅助：选中 / 取消选中卡片 =====
+    const selectCard = async (card, cardIdx) => {
+      card.scrollIntoView({ block: 'center', behavior: 'instant' });
+      let ok = card.classList.contains('checked') || card.classList.contains('active');
+      if (ok) return true;
+      const hoverCover = card.querySelector('[class*="hover_cover"]');
+      if (hoverCover) {
+        hoverCover.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        hoverCover.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        hoverCover.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+        hoverCover.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        hoverCover.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      }
+      const cover = card.querySelector('[class*="cover"]');
+      if (cover && cover !== hoverCover) {
+        cover.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      }
+      card.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      ok = await waitForCondition(() => card.isConnected && (card.classList.contains('checked') || card.classList.contains('active')), 5000, 200);
+      if (!ok && !card.isConnected) {
+        // 节点可能被 React 重渲染替换：按索引重查当前DOM再试一次
+        const fresh = document.querySelectorAll('.grid-item')[cardIdx];
+        if (fresh) {
+          console.log('[Batch] 卡片', cardIdx + 1, '节点已重建，重新点击');
+          fresh.scrollIntoView({ block: 'center', behavior: 'instant' });
+          fresh.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+          ok = await waitForCondition(() => fresh.classList.contains('checked') || fresh.classList.contains('active'), 4000, 200);
+        }
+      }
+      return ok;
+    };
+    // 处理完取消选中，避免选中累积触达页面批量上限（实测约115张后无法再选中）
+    const deselectCard = async (card) => {
+      try {
+        if (card.isConnected && (card.classList.contains('checked') || card.classList.contains('active'))) {
+          card.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+          await sleep(250); // 点击生效即可，不验证class：React重渲染会替换卡片节点，旧节点class永不变化，等待必然假超时3秒
+        }
+      } catch {}
+    };
+
+    // ===== 流水线：滚动窗口（提取1张→发AI），填表与后台提取/AI并行 =====
+    const batchConfig = await new Promise((resolve) => {
+      chrome.storage.sync.get(['lang', 'keywordCount', 'defaultLocation', 'titleKeywords', 'locationHint'], resolve);
+    });
+    const aiResults = new Map(); // task -> Promise<result>（按插入序=最早启动优先消费）
+    let lastGoodLoc = (batchConfig.defaultLocation || '').trim(); // 最近一次成功填入的地点（同批图基本同地，供兜底）
+    const launchAI = (t) => {
+      const p = (async () => {
+        try {
+          return await sendMessageAsync({
+            action: 'generateTags',
+            imageData: t.imgData,
+            imageUrl: t.imgUrl,
+            lang: batchConfig.lang || 'zh',
+            keywordCount: batchConfig.keywordCount || 35,
+            location: batchConfig.titleKeywords || '',
+            locationHint: batchConfig.locationHint || '',
+          });
+        } catch (e) {
+          return { __error: e.message || 'AI分析失败' };
+        }
+      })();
+      aiResults.set(t, p);
+    };
+
+    const extractOne = async (i) => {
+      setBatchProgress(i + 1, cards.length, '提取图片...');
+      // canSubmit 在卡片class上，直接跳过
+      if (cards[i].querySelector('.canSubmit') || cards[i].classList.contains('canSubmit')) {
+        successCount++;
+        setBatchProgress(i + 1, cards.length, '⏭ 可提交，跳过');
+        return null;
+      }
+      const cardImg = cards[i].querySelector('img');
+      const imgUrl = cardImg?.src;
+      if (!imgUrl) {
+        failCount++;
+        setBatchProgress(i + 1, cards.length, '⚠️ 未找到图片，跳过');
+        return null;
+      }
+      // 滚动触发懒加载
+      cards[i].scrollIntoView({ block: 'center', behavior: 'instant' });
+      await sleep(120);
+      let imgData;
+      try { imgData = await canvasExtract(cardImg); } catch {} // 零下载：命中缓存直读
+      if (!imgData) {
+        try {
+          const fetchResp = await Promise.race([
+            sendMessageAsync({ action: 'fetchImage', url: imgUrl }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('获取图片超时')), 15000)),
+          ]);
+          imgData = fetchResp.base64;
+        } catch (e) {
+          if (cardImg) {
+            try { imgData = await imageToBase64(cardImg); } catch {}
+          }
+        }
+      }
+      if (!imgData) {
+        failCount++;
+        setBatchProgress(i + 1, cards.length, '⚠️ 图片提取失败');
+        return null;
+      }
+      const compressed = await compressImage(imgData, 1024, 0.75);
+      return { index: i, card: cards[i], imgUrl, imgData: compressed };
+    };
+
+    const CONCURRENCY = 16;
+    let scanIdx = 0;
+    let filling = false;
+    const fillWindow = async () => {
+      if (filling) return;
+      filling = true;
+      try {
+        while (!batchAbort && scanIdx < cards.length && aiResults.size < CONCURRENCY) {
+          const t = await extractOne(scanIdx++);
+          if (t) launchAI(t);
+        }
+      } finally { filling = false; }
+    };
+
+    await fillWindow(); // 先备好窗口
+
+    for (;;) {
+      if (batchAbort) break;
+      const it = aiResults.entries().next();
+      if (it.done) break;
+      const [t, aiP] = it.value;
+      setBatchProgress(t.index + 1, cards.length, 'AI 分析中...（并行）');
+      let result = await aiP;
+      aiResults.delete(t);
+      fillWindow(); // 立即补位：后台继续提取+AI，与填表并行
+
+      if (result.__error) {
+        failCount++;
+        setBatchProgress(t.index + 1, cards.length, `❌ ${result.__error}`);
+        continue;
       }
 
-      setBatchProgress(i + 1, cards.length, '选中卡片...');
+      // 质量检查（低分同步重试一次，其他AI仍在后台跑）
+      const quality = evaluateResult(result);
+      console.log('[Batch] 卡片', t.index + 1, '质量评分:', quality.score, '问题:', quality.issues);
+      if (quality.score < 50 && batchRetries[t.index] < 1) {
+        console.log('[Batch] 卡片', t.index + 1, '质量低，自动重试');
+        batchRetries[t.index]++;
+        setBatchProgress(t.index + 1, cards.length, '🔄 质量低，重新分析...');
+        try {
+          const retry = await sendMessageAsync({
+            action: 'generateTags',
+            imageData: t.imgData,
+            imageUrl: t.imgUrl,
+            lang: batchConfig.lang || 'zh',
+            keywordCount: batchConfig.keywordCount || 35,
+            location: batchConfig.titleKeywords || '',
+          });
+          if (!retry.__error) result = retry;
+        } catch {}
+      }
 
+      // 选中并填表（表单唯一，必须串行）
+      const perf0 = Date.now();
+      const perf = (s) => console.log(`[Perf] 卡片${t.index + 1} ${s} 累计${Date.now() - perf0}ms`);
+      setBatchProgress(t.index + 1, cards.length, '填入信息...');
       try {
-        // 1. 滚动可见
-        cards[i].scrollIntoView({ block: 'center', behavior: 'instant' });
-
-        // 2. 模拟完整点击序列，确保 React 捕获
-        const card = cards[i];
-        const hoverCover = card.querySelector('[class*="hover_cover"]');
-        if (hoverCover) {
-          hoverCover.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-          hoverCover.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-          hoverCover.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
-          hoverCover.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-          hoverCover.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        const ok = await selectCard(t.card, t.index);
+        perf('选中=' + ok);
+        if (!ok) {
+          // 选中超时 → 重试一次
+          console.log('[Batch] 卡片', t.index + 1, '选中超时，重试');
+          const ok2 = await selectCard(t.card, t.index);
+          if (!ok2) {
+            failCount++;
+            setBatchProgress(t.index + 1, cards.length, '⚠️ 两次选中超时，跳过');
+            continue;
+          }
         }
-        const cover = card.querySelector('[class*="cover"]');
-        if (cover && cover !== hoverCover) {
-          cover.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-        }
-        card.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-
-        // 3. 等待 checked 或 active
-        const isChecked = await waitForCondition(() => card.classList.contains('checked') || card.classList.contains('active'), 5000, 200);
-        if (batchAbort) break;
-        if (!isChecked) {
-          failCount++;
-          setBatchProgress(i + 1, cards.length, '⚠️ 选中超时，跳过');
-          continue;
-        }
-
-        // 4. 检查 canSubmit 标记（500px 可提交状态）
-        if (cards[i].querySelector('.canSubmit') || cards[i].classList.contains('canSubmit')) {
-          successCount++;
-          setBatchProgress(i + 1, cards.length, '⏭ 可提交，跳过');
-          continue;
-        }
-
-        // 4b. 检查是否已有标题 + >=5 关键词
+        // 填表前检查已有标签（阶段1不选中，此处补检查）
         const descEl = findElement(SELECTORS.description);
         const kwEl = findElement(SELECTORS.keywords);
         const existingDesc = descEl?.value?.trim();
@@ -522,89 +674,98 @@
         const kwCount = existingKw ? existingKw.split(/[,，、;；]/).filter(k => k.trim()).length : 0;
         if (existingDesc && kwCount >= 5) {
           successCount++;
-          setBatchProgress(i + 1, cards.length, `⏭ 已有 ${kwCount} 个标签，跳过`);
+          await deselectCard(t.card);
+          setBatchProgress(t.index + 1, cards.length, `⏭ 已有 ${kwCount} 个标签，跳过`);
           continue;
         }
+        await fillFields(result);
+        perf('标题关键词已填');
 
-        // 5. 获取图片 URL
-        const cardImg = cards[i].querySelector('img');
-        const imgUrl = cardImg?.src;
-        if (!imgUrl) {
-          failCount++;
-          setBatchProgress(i + 1, cards.length, '⚠️ 未找到图片，跳过');
-          continue;
+        // 地点：AI识别优先，未识别再用默认地点
+        const aiLoc = (result.location || '').trim();
+        const locToFill = aiLoc || (batchConfig.defaultLocation || '').trim();
+        if (locToFill) {
+          console.log('[Batch] 卡片', t.index + 1, '地点来源:', aiLoc ? 'AI识别: ' + aiLoc : '默认配置: ' + locToFill);
+          setBatchProgress(t.index + 1, cards.length, '📍 填入地点: ' + locToFill);
+          const locOk = await fillCascaderLocation(locToFill);
+          if (locOk) lastGoodLoc = locToFill;
+          perf('地点已填=' + locOk);
+        }
+        if (batchAbort) { await deselectCard(t.card); break; }
+
+        // ===== 验证可提交状态，未达标针对性重试（最多2次）=====
+        let cardOk = await checkCardSubmittable(t.card);
+        perf('canSubmit检查=' + cardOk);
+        let attempt = 0;
+        while (!cardOk && attempt < 2 && !batchAbort) {
+          attempt++;
+          console.log('[Batch] 卡片', t.index + 1, '未达可提交状态，重试', attempt, '/2');
+          setBatchProgress(t.index + 1, cards.length, `🔄 未达可提交，重试 ${attempt}/2`);
+          const reOk = await selectCard(t.card, t.index);
+          if (!reOk) break;
+          // 诊断缺什么：标题 / 关键词 / 地点
+          const d2 = findElement(SELECTORS.description);
+          const k2 = findElement(SELECTORS.keywords);
+          const kwN = k2?.value?.trim() ? k2.value.split(/[,，、;；]/).filter(x => x.trim()).length : 0;
+          if (!d2?.value?.trim() || kwN === 0) {
+            console.log('[Batch] 卡片', t.index + 1, '重试: 标题/关键词缺失，重填');
+            await fillFields(result);
+          }
+          const curLoc = readCascaderValue();
+          if (!curLoc && locToFill) {
+            // 地点匹配失败 = AI 识别的地点粒度/位置不对，重新识别（带上失败反馈），而不是重填同一个
+            console.log('[Batch] 卡片', t.index + 1, '重试: 地点「' + locToFill + '」无法匹配，重新识别地点');
+            setBatchProgress(t.index + 1, cards.length, '🔄 地点无法匹配，重新识别...');
+            try {
+              const r2 = await sendMessageAsync({
+                action: 'generateTags',
+                imageData: t.imgData,
+                imageUrl: t.imgUrl,
+                lang: batchConfig.lang || 'zh',
+                keywordCount: batchConfig.keywordCount || 35,
+                location: batchConfig.titleKeywords || '',
+                locationHint: (batchConfig.locationHint || '') + `；注意：上次识别的地点「${locToFill}」在行政区划列表中无法匹配（通常是粒度错误，如县级市/景区名），必须改用正确粒度的地级行政区（自治州/地级市）`,
+              });
+              const newLoc = (r2 && !r2.__error ? (r2.location || '') : '').trim();
+              if (newLoc) {
+                console.log('[Batch] 卡片', t.index + 1, '重新识别地点:', newLoc);
+                const ok2 = await fillCascaderLocation(newLoc);
+                if (ok2) lastGoodLoc = newLoc;
+              }
+            } catch {}
+          }
+          await deselectCard(t.card);
+          cardOk = await checkCardSubmittable(t.card);
         }
 
-        // 5. 获取图片
-        setBatchProgress(i + 1, cards.length, 'AI 分析中...');
-        let imgData;
-        try {
-          const fetchResp = await Promise.race([
-            sendMessageAsync({ action: 'fetchImage', url: imgUrl }),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('获取图片超时')), 15000)),
-          ]);
-          imgData = fetchResp.base64;
-          if (batchAbort) break;
-        } catch (e) {
-          if (cardImg) {
-            try { imgData = await imageToBase64(cardImg); } catch {}
+        // ===== 最终兜底：重识别也失败 → 用上一张成功填入的地点（同批图基本同地）=====
+        if (!cardOk && lastGoodLoc && !readCascaderValue() && !batchAbort) {
+          console.log('[Batch] 卡片', t.index + 1, '重识别仍失败，用上一张成功地点兜底:', lastGoodLoc);
+          setBatchProgress(t.index + 1, cards.length, `📍 用上一张成功地点兜底: ${lastGoodLoc}`);
+          const reOk = await selectCard(t.card, t.index);
+          if (reOk) {
+            await fillCascaderLocation(lastGoodLoc);
+            await deselectCard(t.card);
+            cardOk = await checkCardSubmittable(t.card);
           }
         }
-        if (!imgData) {
+
+        if (cardOk) {
+          successCount++;
+          setBatchProgress(t.index + 1, cards.length, `✅ ${result.title || '完成'}`);
+        } else {
           failCount++;
-          setBatchProgress(i + 1, cards.length, '⚠️ 图片提取失败');
-          continue;
+          console.log('[Batch] 卡片', t.index + 1, '重试后仍不可提交，标记失败');
+          setBatchProgress(t.index + 1, cards.length, `❌ 重试后仍不可提交，请手动检查`);
         }
-
-        // 6. AI 分析 + 并行填地点
-        const batchConfig = await new Promise((resolve) => {
-          chrome.storage.sync.get(['lang', 'keywordCount', 'defaultLocation'], resolve);
-        });
-
-        const fillLocationPromise = batchConfig.defaultLocation
-          ? fillCascaderLocation(batchConfig.defaultLocation)
-          : Promise.resolve();
-
-        const compressed = await compressImage(imgData, 1600, 0.8);
-
-        const [result] = await Promise.all([
-          sendMessageAsync({
-            action: 'generateTags',
-            imageData: compressed,
-            imageUrl: imgUrl,
-            lang: batchConfig.lang || 'zh',
-            keywordCount: batchConfig.keywordCount || 35,
-          }),
-          fillLocationPromise,
-        ]);
-        if (batchAbort) break;
-
-        // 6. 填入结果（带质量判断）
-        setBatchProgress(i + 1, cards.length, '检查结果质量...');
-
-        const quality = evaluateResult(result);
-        console.log('[Batch] 卡片', i + 1, '质量评分:', quality.score, '问题:', quality.issues);
-
-        if (quality.score < 50 && batchRetries[i] < 1) {
-          console.log('[Batch] 卡片', i + 1, '质量低，自动重试');
-          batchRetries[i]++;
-          setBatchProgress(i + 1, cards.length, '🔄 质量低，重新分析...');
-          i--;
-          continue;
-        }
-
-        setBatchProgress(i + 1, cards.length, '填入信息...');
-        await fillFields(result);
-        if (batchAbort) break;
-
-        successCount++;
-        setBatchProgress(i + 1, cards.length, `✅ ${result.title || '完成'}`);
-        await sleep(200);
-
+        if (!t.card.classList.contains('checked')) { /* 已取消选中 */ } else { await deselectCard(t.card); }
+        perf('流程结束');
+        await sleep(100);
       } catch (err) {
-        console.error(`[Auto Tag] 卡片 ${i + 1} 失败:`, err);
+        console.error(`[Auto Tag] 卡片 ${t.index + 1} 填入失败:`, err);
         failCount++;
-        setBatchProgress(i + 1, cards.length, `❌ ${err.message}`);
+        await deselectCard(t.card);
+        setBatchProgress(t.index + 1, cards.length, `❌ ${err.message}`);
       }
     }
 
@@ -996,31 +1157,27 @@
       console.log('[AutoTag] 获取图片成功, base64长度:', imgData.length);
 
       const config = await new Promise((resolve) => {
-        chrome.storage.sync.get(['lang', 'keywordCount', 'defaultLocation'], resolve);
+        chrome.storage.sync.get(['lang', 'keywordCount', 'defaultLocation', 'titleKeywords', 'locationHint'], resolve);
       });
       console.log('[AutoTag] 配置: lang:', config.lang, 'keywordCount:', config.keywordCount);
 
       setStatus('🤖 AI 分析中...', 'loading');
 
-      imgData = await compressImage(imgData, 1600, 0.8);
+      imgData = await compressImage(imgData, 1024, 0.75);
 
-      const fillLocationPromise = config.defaultLocation
-        ? fillCascaderLocation(config.defaultLocation)
-        : Promise.resolve();
-
-      const [result] = await Promise.all([
-        sendMessageAsync({
-          action: 'generateTags',
-          imageData: imgData,
-          imageUrl: imgUrl,
-          lang: config.lang || 'zh',
-          keywordCount: config.keywordCount || 35,
-        }),
-        fillLocationPromise,
-      ]);
+      const result = await sendMessageAsync({
+        action: 'generateTags',
+        imageData: imgData,
+        imageUrl: imgUrl,
+        lang: config.lang || 'zh',
+        keywordCount: config.keywordCount || 35,
+        location: config.titleKeywords || '',
+        locationHint: config.locationHint || '',
+      });
 
       // 4. 填入结果（带质量判断）
       console.log('[AutoTag] AI返回结果:', JSON.stringify(result).substring(0, 100));
+      console.log('[AutoTag] AI返回location:', JSON.stringify(result.location));
 
       const quality = evaluateResult(result);
       console.log('[AutoTag] 质量评分:', quality.score, '问题:', quality.issues);
@@ -1033,12 +1190,23 @@
       }
 
       fillFields(result);
+
+      // 地点：AI识别优先，未识别再用默认地点
+      const aiLoc = (result.location || '').trim();
+      const locToFill = aiLoc || (config.defaultLocation || '').trim();
+      if (locToFill) {
+        console.log('[AutoTag] 地点来源:', aiLoc ? 'AI识别: ' + aiLoc : '默认配置: ' + locToFill);
+        setStatus('📍 填入地点: ' + locToFill, 'loading');
+        await fillCascaderLocation(locToFill);
+      }
+
       setStatus('✅ 已生成！标题: ' + (cleanTitle(result.title || '') || ''), 'success');
       break;
 
     } catch (err) {
       console.error('[500px Auto Tag] Error:', err);
       setStatus('❌ ' + err.message, 'error');
+      return; // 硬错误（未配置Key、网络失败等）不重试，只有低质量结果才重试
     }
     }
   }
@@ -1098,6 +1266,24 @@
     const sep = url.includes('?') ? '&' : '?';
     url = `${url}${sep}w=2000`;
     return url;
+  }
+
+  // 零下载提取：复用浏览器已缓存的列表缩略图，canvas 直读并压到768px
+  async function canvasExtract(imgEl) {
+    const src = imgEl?.src || imgEl?.getAttribute('data-src');
+    if (!src || src.startsWith('data:image')) return null;
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = src; });
+    const nw = img.naturalWidth, nh = img.naturalHeight;
+    if (!nw || !nh) return null;
+    const scale = Math.min(1, 768 / nw);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(nw * scale);
+    canvas.height = Math.round(nh * scale);
+    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.6); // 跨域污染时 throw
+    return dataUrl.split(',')[1];
   }
 
   async function imageToBase64(imgEl) {
@@ -1178,28 +1364,36 @@
     // 填关键词
     console.log('[KW] result.keywords:', typeof result.keywords, result.keywords?.substring?.(0, 80) || result.keywords);
     const config = await new Promise((resolve) => {
-      chrome.storage.sync.get(['defaultLocation', 'defaultKeywords'], resolve);
+      chrome.storage.sync.get(['titleKeywords', 'defaultKeywords'], resolve);
     });
 
     const defaults = config.defaultKeywords
       ? config.defaultKeywords.split(/[,，、;；\s\n]+/).map(k => k.trim()).filter(Boolean)
       : [];
-    const maxAI = 35 - defaults.length;
+
+    // 标题关键词：会融入标题并追加到关键词（如"茶卡盐湖"）
+    const titleKw = (config.titleKeywords || '').trim();
+    const titleKwList = titleKw
+      ? titleKw.split(/[,，、\s]+/).map(k => k.trim()).filter(Boolean)
+      : [];
+
+    const allExtras = [...titleKwList, ...defaults];
+    const maxAI = 35 - allExtras.length;
 
     if (result.keywords) {
       const raw = String(result.keywords);
       const keywords = cleanKeywords(raw);
-      console.log('[KW] 清洗后:', keywords.length, '个, 前5:', keywords.slice(0, 5), '默认:', defaults.length, '个, AI上限:', maxAI);
-      keywords.push(...defaults);
+      console.log('[KW] 清洗后:', keywords.length, '个, 前5:', keywords.slice(0, 5), '标题关键词:', titleKwList, '默认:', defaults.length, '个, AI上限:', maxAI);
+      keywords.push(...allExtras);
       console.log('[KW] 合计:', keywords.length, '个');
       if (keywords.length > 0) {
         await fillKeywordsSequentially(null, keywords.slice(0, 35));
       } else {
         console.log('[KW] ⚠️ 解析后关键词为空');
       }
-    } else if (defaults.length > 0) {
-      console.log('[KW] AI无关键词，仅填默认:', defaults.length, '个,', defaults);
-      await fillKeywordsSequentially(null, defaults.slice(0, 35));
+    } else if (allExtras.length > 0) {
+      console.log('[KW] AI无关键词，仅填额外:', allExtras.length, '个,', allExtras);
+      await fillKeywordsSequentially(null, allExtras.slice(0, 35));
     } else {
       console.log('[KW] ⚠️ result.keywords 为空');
     }
@@ -1438,72 +1632,141 @@
     '内蒙古自治区': ['中国', '内蒙古自治区'],
   };
 
-  // 填 Cascader 地点（级联选择器，纯点击方式）
+  // 填 Cascader 地点：打开下拉 → 优先搜索框匹配 → 回退逐级点击（点到最后一级叶子）
   async function fillCascaderLocation(place) {
+    if (!place) return;
+    console.log('[Location] 开始填入地点:', place);
+    // AI 可能返回"省份 城市"多段格式（如"青海省 海西"），也可能含景区名（列表中不存在）
+    const tokens = String(place).split(/[\s/、，,·]+/).filter(Boolean);
+
     const cascader = document.querySelector('.ant-cascader, .ant-select.ant-cascader, [class*="cascader"]');
     if (!cascader) {
+      console.log('[Location] 未找到级联选择器');
       return;
     }
 
-    // 查找地点路径
-    let path = LOCATION_MAP[place];
-    if (!path) {
-      // 尝试模糊匹配
-      for (const [key, val] of Object.entries(LOCATION_MAP)) {
-        if (key.includes(place) || place.includes(key)) {
-          path = val;
+    // antd 下拉挂在 body 上，取当前打开下拉里的所有列
+    const getColumns = () => {
+      const dd = document.querySelector(
+        '.ant-cascader-dropdown:not(.ant-select-dropdown-hidden), .ant-select-dropdown:not(.ant-select-dropdown-hidden)'
+      );
+      if (!dd) return [];
+      return [...dd.querySelectorAll('.ant-cascader-menu')];
+    };
+    // 兼容 antd v4 (.ant-cascader-menu-item) 和 v5 (.ant-cascader-option)
+    const getItems = (col) =>
+      [...col.querySelectorAll('.ant-cascader-option, .ant-cascader-menu-item, .ant-select-item-option')];
+    const lastColumnItems = () => {
+      const cols = getColumns();
+      return cols.length ? getItems(cols[cols.length - 1]) : [];
+    };
+    const allMatches = (items, term) =>
+      items.filter((it) => {
+        const t = it.textContent?.trim();
+        return t && (t === term || t.includes(term) || term.includes(t));
+      });
+    const closeDropdown = () => {
+      document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+    };
+
+    // 打开下拉
+    const selector = cascader.querySelector('.ant-select-selector') || cascader;
+    clickNative(selector);
+    const opened = await waitForElement(
+      '.ant-cascader-dropdown:not(.ant-select-dropdown-hidden), .ant-select-dropdown:not(.ant-select-dropdown-hidden)',
+      3000,
+      100
+    );
+    if (!opened) {
+      console.log('[Location] 下拉未能打开');
+      return;
+    }
+    // 等首列渲染完成（条件等待，通常 <100ms）
+    await waitForCondition(() => getColumns().length > 0, 1000, 50);
+
+    let filled = false;
+    const searchInput = cascader.querySelector('.ant-select-selection-search-input, input');
+    // ===== 方式1：从最具体到最宽泛，逐词用搜索框匹配 =====
+    if (searchInput) {
+      try {
+        for (let i = tokens.length - 1; i >= 0 && !filled; i--) {
+          const term = tokens[i];
+          searchInput.focus();
+          await sleep(60);
+          setNativeValue(searchInput, term);
+          searchInput.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: term }));
+          await sleep(150);
+          const matchedAll = await waitForCondition(() => allMatches(lastColumnItems(), term), 2000, 80);
+          if (matchedAll && matchedAll.length === 1) {
+            // 唯一匹配才点击：多个候选时说明词太宽泛（如"青海省"匹配全省9市），点了就是瞎填
+            console.log('[Location] 搜索唯一匹配:', matchedAll[0].textContent?.trim(), '(词:', term + ')');
+            clickNative(matchedAll[0]);
+            await sleep(150);
+            filled = true;
+          } else if (matchedAll && matchedAll.length > 1) {
+            console.log('[Location] 搜索到' + matchedAll.length + '个候选，不确定对应关系，跳过词:', term);
+          }
+        }
+        if (!filled) {
+          // 清空搜索词，恢复原始列表
+          setNativeValue(searchInput, '');
+          searchInput.dispatchEvent(new InputEvent('input', { bubbles: true }));
+          await sleep(150);
+        }
+      } catch (e) {
+        console.warn('[Location] 搜索方式异常:', e.message);
+      }
+    }
+
+    // ===== 方式2：按词序在真实列表里逐步下钻（省→市），点到叶子为止 =====
+    if (!filled) {
+      let drilled = false; // 是否已开始下钻（点过国家列）
+      for (const term of tokens) {
+        const before = getColumns().length;
+        let ms = allMatches(lastColumnItems(), term);
+        // AI 返回"省份 城市"不含国家名：首列匹配不到时，先明确点"中国"再重找
+        if (!ms.length && !drilled && getColumns().length === 1) {
+          const cn = lastColumnItems().find(it => it.textContent?.trim() === '中国');
+          if (cn) {
+            console.log('[Location] 首列无「' + term + '」，先进入 中国 再匹配');
+            clickNative(cn);
+            await waitForCondition(() => getColumns().length > before, 1200, 50);
+            drilled = true;
+            ms = allMatches(lastColumnItems(), term);
+          }
+        }
+        if (!ms.length) {
+          console.log('[Location] 列表中无匹配:', term);
+          break;
+        }
+        if (ms.length > 1) {
+          console.log('[Location] 列表有' + ms.length + '个同名候选，宁空勿错，停止:', term);
+          break;
+        }
+        console.log('[Location] 点击:', ms[0].textContent?.trim());
+        clickNative(ms[0]);
+        // 等下一列出现或确认已到叶子（条件等待，通常 <100ms）
+        await waitForCondition(() => getColumns().length !== before, 1200, 50);
+        drilled = true;
+        // 没有新列出现说明已选到叶子节点
+        if (getColumns().length <= before) {
+          filled = true;
           break;
         }
       }
     }
-    if (!path) {
-      // 默认当作中国下的城市
-      path = ['中国', place];
-    }
 
-
-    // 打开下拉：focus 搜索输入框
-    const searchInput = cascader.querySelector('.ant-select-selection-search-input');
-    if (searchInput) {
-      searchInput.focus();
-      searchInput.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    closeDropdown();
+    await sleep(150);
+    if (filled) {
+      console.log('[Location] 填入成功:', place);
     } else {
-      const selector = cascader.querySelector('.ant-select-selector') || cascader;
-      selector.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      // 宁空勿错：绝不瞎点兜底
+      console.log('[Location] ⚠️ 未找到对应选项，地点留空:', place);
+      setStatus('⚠️ 地点「' + place + '」不在列表中，未填入', 'info');
     }
-    await waitForElement('.ant-cascader-dropdown:not(.ant-select-dropdown-hidden)', 3000, 100);
-
-    for (let level = 0; level < path.length; level++) {
-      const target = path[level];
-      const clicked = await clickCascaderOption(target);
-      if (!clicked) {
-        break;
-      }
-      if (level < path.length - 1) {
-        await waitForCondition(() => {
-          const menus = document.querySelectorAll('.ant-cascader-menu');
-          return menus.length > level + 1;
-        }, 2000, 100);
-      }
-    }
-
-    // 关闭下拉（点其他地方）
-    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    await sleep(200);
-  }
-
-  // 点击级联菜单中指定文字的选项
-  async function clickCascaderOption(text) {
-    const allItems = document.querySelectorAll('.ant-cascader-menu-item');
-    for (const item of allItems) {
-      const t = item.textContent?.trim();
-      if (t === text) {
-        item.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-        item.click();
-        return true;
-      }
-    }
-    return false;
+    return filled;
   }
 
   function sleep(ms) {

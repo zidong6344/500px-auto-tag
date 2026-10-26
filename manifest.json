@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "500px Auto Tag",
-  "version": "1.0.0",
+  "version": "1.0.24",
   "description": "AI 驱动的 500px 图片标题和关键词自动生成（支持火山引擎豆包/Ollama）",
   "permissions": ["activeTab", "storage", "scripting"],
   "host_permissions": [
@@ -10,8 +10,7 @@
     "https://*.aliyuncs.com/*",
     "https://*.500px.me/*",
     "http://localhost:11434/*",
-    "https://ark.cn-beijing.volces.com/*",
-    "https://api.xiaomimimo.com/*"
+    "https://ark.cn-beijing.volces.com/*"
   ],
   "action": {
     "default_popup": "popup.html",

@@ -163,11 +163,6 @@
       <span>火山引擎豆包</span>
     </label>
     <label>
-      <input type="radio" name="provider" value="mimo" />
-      <span class="provider-icon">🤖</span>
-      <span>Mimo</span>
-    </label>
-    <label>
       <input type="radio" name="provider" value="ollama" />
       <span class="provider-icon">🦙</span>
       <span>Ollama 本地</span>
@@ -180,37 +175,24 @@
 
     <label for="apiKey">火山引擎 API Key</label>
     <input type="password" id="apiKey" placeholder="在方舟平台获取 API Key" />
-    <p class="hint">获取方式：火山引擎方舟平台 → <a class="link" href="https://console.volcengine.com/ark" target="_blank">ark.cn-beijing.volces.com</a> → 创建接入点 → 复制 Key</p>
+    <p class="hint">获取方式：火山引擎方舟平台 → <a class="link" href="https://console.volcengine.com/ark" target="_blank">ark.cn-beijing.volces.com</a> → API Key 管理 → 复制 Key（Coding Plan 通用）</p>
 
-    <label for="volcModel">模型 Endpoint ID</label>
-    <input type="text" id="volcModel" placeholder="如：ep-20241028-xxxxx（在方舟平台创建推理接入点后获得）" />
-    <p class="hint">推荐 Doubao-Seed-1.6-flash（快·便宜），在方舟平台创建推理接入点 → 复制 Endpoint ID 填入此处</p>
-
-    <div class="info-box">
-      <strong>豆包视觉模型</strong>：中文理解能力极佳，图库标题质量高，速度快（约2-5秒/张）<br/>
-      费用：约 0.01-0.03 元/张，新用户有免费额度
-    </div>
-  </div>
-
-  <!-- Mimo 配置 -->
-  <div class="mimo-section" id="mimoSection">
-    <div class="section-divider"></div>
-
-    <label for="mimoApiKey">Mimo API Key</label>
-    <input type="password" id="mimoApiKey" placeholder="在 Mimo 平台获取 API Key" />
-    <p class="hint">获取方式：<a class="link" href="https://platform.xiaomimimo.com" target="_blank">Mimo 平台</a> → 创建 API Key</p>
-
-    <label for="mimoModel">Mimo 模型</label>
-    <select id="mimoModel">
-      <option value="mimo-v2-omni" selected>mimo-v2-omni（视觉理解·推荐）</option>
-      <option value="mimo-v2.5">mimo-v2.5</option>
-      <option value="mimo-v2.5-pro">mimo-v2.5-pro</option>
+    <label for="volcModel">Coding Plan 模型</label>
+    <select id="volcModel">
+      <option value="doubao-seed-2.1-lite" selected>doubao-seed-2.1-lite（更快·推荐）</option>
+      <option value="doubao-seed-2.1-pro">doubao-seed-2.1-pro（视觉理解更强·稍慢）</option>
+      <option value="doubao-seed-evolving">doubao-seed-evolving（持续进化）</option>
+      <option value="doubao-seed-2.0-mini">doubao-seed-2.0-mini（轻量）</option>
+      <option value="glm-5.3">glm-5.3</option>
+      <option value="glm-5.3-flash">glm-5.3-flash</option>
+      <option value="deepseek-v4.1-flash">deepseek-v4.1-flash</option>
+      <option value="minimax-m3">minimax-m3</option>
     </select>
-    <p class="hint">支持视觉理解，中文效果好，速度快</p>
+    <p class="hint">使用方舟 Coding Plan 订阅，直接选择模型名称即可，无需创建接入点</p>
 
     <div class="info-box">
-      <strong>Mimo 视觉模型</strong>：小米 AI 视觉模型，中文理解能力优秀<br/>
-      API 使用 api-key 头传递认证
+      <strong>豆包 Seed 2.1 视觉模型</strong>：支持图片/视频理解，中文图库标题质量高<br/>
+      Coding Plan 包月订阅，不限调用次数
     </div>
   </div>
 
@@ -255,11 +237,19 @@
 
   <label for="defaultLocation">默认拍摄地点</label>
   <input type="text" id="defaultLocation" placeholder="如：北京、上海、广东省" />
-  <p class="hint">支持：北京/上海/天津/重庆/香港/澳门 或 省份名</p>
+  <p class="hint">仅填入 500px 的地点级联选择器，不会出现在标题和关键词中</p>
+
+  <label for="locationHint">参考地点范围（可选）</label>
+  <input type="text" id="locationHint" placeholder="如：青甘大环线（青海省、甘肃省一带）" />
+  <p class="hint">告诉 AI 这批照片的大致拍摄区域，AI 只会从该区域的行政区划中选地点，超出范围的识别会被丢弃留空，大幅减少误判</p>
+
+  <label for="titleKeywords">标题关键词</label>
+  <input type="text" id="titleKeywords" placeholder="如：茶卡盐湖、西湖、外滩" />
+  <p class="hint">会融入 AI 生成的标题，并追加到关键词中（逗号分隔多个）</p>
 
   <label for="defaultKeywords">默认关键词</label>
   <input type="text" id="defaultKeywords" placeholder="如：视觉中国,商业摄影,版权图片" />
-  <p class="hint">每张图都会追加这些关键词，逗号分隔</p>
+  <p class="hint">每张图都会追加这些关键词，逗号分隔（不进标题）</p>
 
   <button class="btn" id="save">保存设置</button>
   <div class="status" id="status"></div>
